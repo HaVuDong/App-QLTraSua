@@ -35,7 +35,7 @@ export function ErrorStateView({ message, onRetry }: ErrorStateProps) {
             backgroundColor: COLORS.surfaceLight,
           }}
         >
-          <Text style={{ ...TYPOGRAPHY.caption, color: COLORS.text }}>Thu lai</Text>
+          <Text style={{ ...TYPOGRAPHY.caption, color: COLORS.text }}>Thử lại</Text>
         </TouchableOpacity>
       ) : null}
     </View>

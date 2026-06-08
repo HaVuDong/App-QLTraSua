@@ -1,4 +1,4 @@
-import type { TextStyle } from 'react-native';
+import { Platform, type TextStyle } from 'react-native';
 
 export const COLORS = {
   primary: '#10B981',
@@ -65,25 +65,34 @@ export const TYPOGRAPHY: Record<'hero' | 'title' | 'subtitle' | 'body' | 'captio
 };
 
 export const SHADOWS = {
-  card: {
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.5,
-    shadowRadius: 20,
-    elevation: 6,
-  },
-  glowGreen: {
-    shadowColor: COLORS.glowGreen,
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 1,
-    shadowRadius: 18,
-    elevation: 8,
-  },
-  glowPurple: {
-    shadowColor: COLORS.glowPurple,
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 1,
-    shadowRadius: 18,
-    elevation: 8,
-  },
+  card:
+    Platform.OS === 'web'
+      ? {}
+      : {
+          shadowColor: '#000',
+          shadowOffset: { width: 0, height: 10 },
+          shadowOpacity: 0.5,
+          shadowRadius: 20,
+          elevation: 6,
+        },
+  glowGreen:
+    Platform.OS === 'web'
+      ? {}
+      : {
+          shadowColor: COLORS.glowGreen,
+          shadowOffset: { width: 0, height: 0 },
+          shadowOpacity: 1,
+          shadowRadius: 18,
+          elevation: 8,
+        },
+  glowPurple:
+    Platform.OS === 'web'
+      ? {}
+      : {
+          shadowColor: COLORS.glowPurple,
+          shadowOffset: { width: 0, height: 0 },
+          shadowOpacity: 1,
+          shadowRadius: 18,
+          elevation: 8,
+        },
 };

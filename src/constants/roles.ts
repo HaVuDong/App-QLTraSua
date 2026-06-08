@@ -5,8 +5,8 @@ export const VALID_ROLES: UserRole[] = ['SYSTEM_OWNER', 'ADMIN', 'MANAGER', 'USE
 export const ADMIN_DASHBOARD_ROLES: UserRole[] = ['ADMIN', 'MANAGER'];
 export const EMPLOYEE_ROLES: UserRole[] = ['USER', 'KITCHEN'];
 
-// Shift check-in/out is employee flow only.
-export const SHIFT_ROLES: UserRole[] = ['USER'];
+// Shift check-in/out and registration flow.
+export const SHIFT_ROLES: UserRole[] = ['MANAGER', 'USER', 'KITCHEN'];
 export const ORDER_ROLES: UserRole[] = ['ADMIN', 'MANAGER', 'USER', 'KITCHEN'];
 export const MANAGEMENT_ROLES: UserRole[] = ['ADMIN', 'MANAGER'];
 

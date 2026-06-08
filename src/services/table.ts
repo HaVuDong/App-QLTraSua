@@ -4,11 +4,13 @@ export type TableStatus = 'EMPTY' | 'SERVING' | 'PAYING' | 'CLEANING';
 
 export interface DiningTable {
   _id: string;
+  tableNumber?: string;
   name: string;
   location?: string;
   capacity?: number;
   status: TableStatus;
   qrCodeToken?: string;
+  qrUrl?: string;
   isHidden?: boolean;
   defaultItemsEnabled?: boolean;
   createdAt?: string;
@@ -16,6 +18,7 @@ export interface DiningTable {
 }
 
 export interface SaveTableInput {
+  tableNumber?: string;
   name: string;
   location?: string;
   capacity?: number;

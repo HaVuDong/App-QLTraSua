@@ -4,16 +4,21 @@ import { Platform } from 'react-native';
 const ACCESS_TOKEN_KEY = 'trasua_access_token';
 const DEVICE_ID_KEY = 'trasua_device_id';
 const webFallbackStore = new Map<string, string>();
-const OTP_BYPASS_DEVICE_ID = (process.env.EXPO_PUBLIC_OTP_BYPASS_DEVICE_ID || 'test_device_1').trim();
+const OTP_BYPASS_FLAG = process.env.EXPO_PUBLIC_ENABLE_OTP_BYPASS === 'true';
+const OTP_BYPASS_DEVICE_ID = (process.env.EXPO_PUBLIC_OTP_BYPASS_DEVICE_ID || '').trim();
 
 function isWebPlatform() {
   return Platform.OS === 'web';
 }
 
+function isDevelopmentEnvironment() {
+  return typeof __DEV__ === 'boolean' ? __DEV__ : process.env.NODE_ENV !== 'production';
+}
+
 function isOtpBypassEnabled() {
-  // Temporary dev behavior: allow skipping OTP device flow on web by forcing a known device id.
-  // Set EXPO_PUBLIC_DISABLE_OTP=false to turn this off.
-  return isWebPlatform() && process.env.EXPO_PUBLIC_DISABLE_OTP !== 'false';
+  // Local development only: bypass must be explicitly enabled.
+  // If flags are missing, default behavior remains secure (OTP/device verification is enforced).
+  return isWebPlatform() && isDevelopmentEnvironment() && OTP_BYPASS_FLAG && OTP_BYPASS_DEVICE_ID.length > 0;
 }
 
 function getWebStorage() {

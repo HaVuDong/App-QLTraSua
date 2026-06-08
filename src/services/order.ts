@@ -15,6 +15,8 @@ export interface OrderItemRef {
   unit?: string;
   category?: string;
   imageUrl?: string;
+  sellingPrice?: number;
+  status?: string;
 }
 
 export interface OrderItem {
@@ -41,7 +43,9 @@ export interface ActiveOrder {
 }
 
 export interface CreateOrderItemInput {
-  itemId: string;
+  menuItemId?: string;
+  // Legacy compatibility for older payloads
+  itemId?: string;
   quantity: number;
   note?: string;
 }

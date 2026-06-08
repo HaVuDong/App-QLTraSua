@@ -21,6 +21,7 @@ export interface StaffUser {
   createdAt?: string;
   updatedAt?: string;
   mustChangePassword?: boolean;
+  tempPassword?: string;
 }
 
 export interface CreateStaffInput {
@@ -48,7 +49,7 @@ export async function getStaffUsers() {
 
 export async function createStaffUser(payload: CreateStaffInput) {
   const res = await api.post('/users', payload);
-  return res.data as StaffUser;
+  return res.data as StaffUser & { tempPassword?: string };
 }
 
 export async function updateStaffUser(userId: string, payload: UpdateStaffInput) {

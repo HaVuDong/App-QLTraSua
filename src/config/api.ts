@@ -8,5 +8,15 @@ function getDefaultBaseUrl() {
   return 'http://localhost:3000';
 }
 
-export const API_BASE_URL = (process.env.EXPO_PUBLIC_API_BASE_URL || '').trim() || getDefaultBaseUrl();
+function getDefaultCustomerAppBaseUrl() {
+  return 'http://localhost:5173';
+}
 
+function trimTrailingSlash(value: string) {
+  return value.trim().replace(/\/+$/, '');
+}
+
+export const API_BASE_URL = (process.env.EXPO_PUBLIC_API_BASE_URL || '').trim() || getDefaultBaseUrl();
+export const CUSTOMER_APP_BASE_URL = trimTrailingSlash(
+  (process.env.EXPO_PUBLIC_CUSTOMER_APP_BASE_URL || '').trim() || getDefaultCustomerAppBaseUrl(),
+);
