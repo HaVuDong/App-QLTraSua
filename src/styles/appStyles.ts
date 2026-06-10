@@ -332,8 +332,14 @@ export const styles = StyleSheet.create({
     fontWeight: '600',
   },
   orderItems: {
-    rowGap: SPACING.sm,
+    rowGap: SPACING.md,
     marginBottom: SPACING.lg,
+  },
+  orderItemRowWrap: {
+    rowGap: SPACING.sm,
+    paddingVertical: SPACING.sm,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(255,255,255,0.04)',
   },
   orderItemRow: {
     flexDirection: 'row',
@@ -355,8 +361,28 @@ export const styles = StyleSheet.create({
   itemStatusPreparing: {
     color: COLORS.primaryLight,
   },
+  itemStatusCancelled: {
+    color: COLORS.error,
+  },
   itemStatusDefault: {
     color: COLORS.textMuted,
+  },
+  buttonItemReady: {
+    height: 38,
+    backgroundColor: 'rgba(16,185,129,0.18)',
+    borderWidth: 1,
+    borderColor: 'rgba(16,185,129,0.35)',
+  },
+  buttonItemRevert: {
+    height: 34,
+    backgroundColor: 'rgba(255,255,255,0.04)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
+  },
+  buttonTextSmall: {
+    color: COLORS.textSoft,
+    fontSize: TYPOGRAPHY.tiny.fontSize,
+    fontWeight: '600',
   },
   metricGrid: {
     rowGap: SPACING.md,

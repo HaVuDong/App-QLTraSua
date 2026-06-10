@@ -695,12 +695,38 @@ export function OrderScreen() {
                         ? styles.itemStatusReady
                         : item.status === 'PREPARING'
                           ? styles.itemStatusPreparing
-                          : styles.itemStatusDefault;
+                          : item.status === 'CANCELLED'
+                            ? styles.itemStatusCancelled
+                            : styles.itemStatusDefault;
+
+                    const itemKey = item._id || item.itemId?._id || `${order._id}-${index}`;
+                    const canMarkReady = order.status === 'IN_PROGRESS' && item.status === 'PREPARING';
+                    const canRevertToPreparing = order.status === 'IN_PROGRESS' && item.status === 'READY';
 
                     return (
-                      <View key={`${order._id}-${index}`} style={styles.orderItemRow}>
-                        <Text style={styles.orderItemText}>{item.quantity}x {item.itemId?.name || 'Món'}</Text>
-                        <Text style={[styles.itemStatus, itemStatusStyle]}>{getOrderItemStatusLabel(item.status)}</Text>
+                      <View key={itemKey} style={styles.orderItemRowWrap}>
+                        <View style={styles.orderItemRow}>
+                          <Text style={styles.orderItemText}>{item.quantity}x {item.itemId?.name || 'Món'}</Text>
+                          <Text style={[styles.itemStatus, itemStatusStyle]}>{getOrderItemStatusLabel(item.status)}</Text>
+                        </View>
+                        {canMarkReady ? (
+                          <TouchableOpacity
+                            activeOpacity={0.8}
+                            style={[styles.buttonBase, styles.buttonItemReady]}
+                            onPress={() => handleUpdateItemStatus(order._id, itemKey, 'READY')}
+                          >
+                            <Text style={styles.buttonText}>✓ Đã làm xong</Text>
+                          </TouchableOpacity>
+                        ) : null}
+                        {canRevertToPreparing ? (
+                          <TouchableOpacity
+                            activeOpacity={0.8}
+                            style={[styles.buttonBase, styles.buttonItemRevert]}
+                            onPress={() => handleUpdateItemStatus(order._id, itemKey, 'PREPARING')}
+                          >
+                            <Text style={styles.buttonTextSmall}>↩ Chưa xong, đang làm lại</Text>
+                          </TouchableOpacity>
+                        ) : null}
                       </View>
                     );
                   })}
