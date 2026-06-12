@@ -32,6 +32,7 @@ export interface OrderItem {
 export interface ActiveOrder {
   _id: string;
   tableId?: string | OrderTableRef;
+  sessionId?: string | { _id?: string };
   items: OrderItem[];
   status: OrderStatus;
   totalAmount?: number;

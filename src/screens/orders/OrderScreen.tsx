@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, Alert, RefreshControl, ScrollView, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { useAuth } from '../../auth/AuthContext';
 import { ScreenBackdrop } from '../../components/common/ScreenBackdrop';
@@ -12,6 +12,18 @@ import { getTables, type DiningTable } from '../../services/table';
 import { styles } from '../../styles/appStyles';
 import { COLORS } from '../../theme';
 import { getInventoryCategoryLabel, getOrderItemStatusLabel, getOrderStatusLabel } from '../../utils/displayLabels';
+
+interface ActiveOrderGroup {
+  key: string;
+  tableLabel: string;
+  tableStatus?: string;
+  orders: ActiveOrder[];
+  totalAmount: number;
+  activeItemCount: number;
+  readyItemCount: number;
+  hasPending: boolean;
+}
+
 export function OrderScreen() {
   const { user, socketRef, socketReady } = useAuth();
   const [orders, setOrders] = useState<ActiveOrder[]>([]);
@@ -152,8 +164,8 @@ export function OrderScreen() {
           return {
             ...o,
             items: o.items.map((item: any) => {
-              const candidateId = item.itemId?._id || item.itemId || item._id;
-              if (candidateId === data.itemId) {
+              const candidateIds = [item._id, item.itemId?._id, item.itemId].filter(Boolean).map(String);
+              if (candidateIds.includes(String(data.itemId))) {
                 return { ...item, status: data.status };
               }
               return item;
@@ -298,21 +310,25 @@ export function OrderScreen() {
     [syncAfterAction],
   );
 
-  const handleCheckout = useCallback(
-    (order: ActiveOrder) => {
+  const handleCheckoutGroup = useCallback(
+    (group: ActiveOrderGroup) => {
       runConfirmedAction({
-        title: 'Thanh toán',
-        message: 'Xác nhận thanh toán đơn hàng này?',
-        confirmText: 'Thanh toán',
+        title: 'Xác nhận đã thanh toán',
+        message: `Xác nhận ${group.tableLabel} đã thanh toán thủ công cho toàn bộ phiên bàn?`,
+        confirmText: 'Đã thanh toán',
         onConfirm: async () => {
           try {
-            const canContinue = await validateOrderAgainstLatestStock(order);
-            if (!canContinue) return;
-            await checkoutOrder(order._id, 0, 'FLAT');
+            for (const order of group.orders) {
+              const canContinue = await validateOrderAgainstLatestStock(order);
+              if (!canContinue) return;
+            }
+            for (const order of group.orders) {
+              await checkoutOrder(order._id, 0, 'FLAT');
+            }
             syncAfterAction();
-            Alert.alert('Thành công', 'Tạo đơn thành công và đã cập nhật trạng thái đơn.');
+            Alert.alert('Thành công', `${group.tableLabel} đã được xác nhận thanh toán.`);
           } catch (err: any) {
-            Alert.alert('Lỗi', mapOrderErrorMessage(err, 'Tạo đơn thất bại'));
+            Alert.alert('Lỗi', mapOrderErrorMessage(err, 'Không thể xác nhận thanh toán'));
           }
         },
       });
@@ -447,6 +463,45 @@ export function OrderScreen() {
       setOrderSubmitting(false);
     }
   }, [closeCreateOrderForm, draftItems, fetchActiveOrders, fetchOrderFormResources, mapOrderErrorMessage, menuItems, orderNote, selectedTableId]);
+
+  const activeOrderGroups = useMemo<ActiveOrderGroup[]>(() => {
+    const groupMap = new Map<string, ActiveOrderGroup>();
+
+    orders.forEach((order) => {
+      const sessionRef = order.sessionId;
+      const sessionId = typeof sessionRef === 'string' ? sessionRef : sessionRef?._id;
+      const tableId = typeof order.tableId === 'string' ? order.tableId : order.tableId?._id;
+      const tableLabel = typeof order.tableId === 'string' ? 'Mang đi' : order.tableId?.name || 'Mang đi';
+      const tableStatus = typeof order.tableId === 'string' ? undefined : order.tableId?.status;
+      const key = sessionId || tableId || order._id;
+      const activeItems = (order.items || []).filter((item: any) => item.status !== 'CANCELLED');
+      const readyItems = activeItems.filter((item: any) => item.status === 'READY');
+      const orderAmount = Number(order.finalAmount ?? order.totalAmount ?? 0);
+
+      const existing = groupMap.get(key);
+      if (existing) {
+        existing.orders.push(order);
+        existing.totalAmount += orderAmount;
+        existing.activeItemCount += activeItems.length;
+        existing.readyItemCount += readyItems.length;
+        existing.hasPending = existing.hasPending || order.status === 'PENDING';
+        return;
+      }
+
+      groupMap.set(key, {
+        key,
+        tableLabel,
+        tableStatus,
+        orders: [order],
+        totalAmount: orderAmount,
+        activeItemCount: activeItems.length,
+        readyItemCount: readyItems.length,
+        hasPending: order.status === 'PENDING',
+      });
+    });
+
+    return Array.from(groupMap.values());
+  }, [orders]);
 
   if (!user || !ORDER_ROLES.includes(user.role)) {
     return (
@@ -671,85 +726,96 @@ export function OrderScreen() {
 
           {loadError ? <ErrorStateView message={loadError} onRetry={() => void fetchActiveOrders()} /> : null}
 
-          {!loadError && orders.length === 0 ? (
+          {!loadError && activeOrderGroups.length === 0 ? (
             <EmptyStateView message="Không có đơn hàng nào." />
           ) : (
-            orders.map((order) => (
-              <View key={order._id} style={[styles.glassCard, styles.orderCard]}>
-                <View style={styles.orderHeader}>
-                  <Text style={styles.orderTableText}>
-                    {typeof order.tableId === 'string' ? 'Mang đi' : order.tableId?.name || 'Mang đi'}
-                  </Text>
-                  <View style={[styles.statusBadge, order.status === 'PENDING' ? styles.statusPending : styles.statusProgress]}>
-                    <Text style={styles.statusText}>{getOrderStatusLabel(order.status)}</Text>
+            activeOrderGroups.map((group) => {
+              const groupStatusLabel = group.hasPending
+                ? 'Có đơn chờ'
+                : group.activeItemCount > 0 && group.readyItemCount === group.activeItemCount
+                  ? 'Món đã xong'
+                  : 'Đang xử lý';
+
+              return (
+                <View key={group.key} style={[styles.glassCard, styles.orderCard]}>
+                  <View style={styles.orderHeader}>
+                    <Text style={styles.orderTableText}>{group.tableLabel}</Text>
+                    <View style={[styles.statusBadge, group.hasPending ? styles.statusPending : styles.statusProgress]}>
+                      <Text style={styles.statusText}>{groupStatusLabel}</Text>
+                    </View>
                   </View>
-                </View>
-                {typeof order.tableId !== 'string' && order.tableId?.status ? (
-                  <Text style={styles.staffMeta}>Bàn: {getTableStatusLabel(order.tableId.status)} | Đơn đang mở</Text>
-                ) : null}
+                  {group.tableStatus ? (
+                    <Text style={styles.staffMeta}>
+                      Bàn: {getTableStatusLabel(group.tableStatus)} | {group.orders.length} đơn trong phiên | {group.readyItemCount}/{group.activeItemCount} món đã xong
+                    </Text>
+                  ) : null}
 
-                <View style={styles.orderItems}>
-                  {order.items.map((item: any, index: number) => {
-                    const itemStatusStyle =
-                      item.status === 'READY'
-                        ? styles.itemStatusReady
-                        : item.status === 'PREPARING'
-                          ? styles.itemStatusPreparing
-                          : item.status === 'CANCELLED'
-                            ? styles.itemStatusCancelled
-                            : styles.itemStatusDefault;
+                  {group.orders.map((order) => (
+                    <View key={order._id} style={styles.orderItems}>
+                      <Text style={styles.staffMeta}>
+                        Đơn #{order._id.slice(-6).toUpperCase()} - {getOrderStatusLabel(order.status)}
+                      </Text>
+                      {order.items.map((item: any, index: number) => {
+                        const itemStatusStyle =
+                          item.status === 'READY'
+                            ? styles.itemStatusReady
+                            : item.status === 'PREPARING'
+                              ? styles.itemStatusPreparing
+                              : item.status === 'CANCELLED'
+                                ? styles.itemStatusCancelled
+                                : styles.itemStatusDefault;
 
-                    const itemKey = item._id || item.itemId?._id || `${order._id}-${index}`;
-                    const canMarkReady = order.status === 'IN_PROGRESS' && item.status === 'PREPARING';
-                    const canRevertToPreparing = order.status === 'IN_PROGRESS' && item.status === 'READY';
+                        const itemKey = item._id || item.itemId?._id || `${order._id}-${index}`;
+                        const canMarkReady = order.status === 'IN_PROGRESS' && item.status === 'PREPARING';
+                        const canRevertToPreparing = order.status === 'IN_PROGRESS' && item.status === 'READY';
 
-                    return (
-                      <View key={itemKey} style={styles.orderItemRowWrap}>
-                        <View style={styles.orderItemRow}>
-                          <Text style={styles.orderItemText}>{item.quantity}x {item.itemId?.name || 'Món'}</Text>
-                          <Text style={[styles.itemStatus, itemStatusStyle]}>{getOrderItemStatusLabel(item.status)}</Text>
+                        return (
+                          <View key={itemKey} style={styles.orderItemRowWrap}>
+                            <View style={styles.orderItemRow}>
+                              <Text style={styles.orderItemText}>{item.quantity}x {item.itemId?.name || 'Món'}</Text>
+                              <Text style={[styles.itemStatus, itemStatusStyle]}>{getOrderItemStatusLabel(item.status)}</Text>
+                            </View>
+                            {canMarkReady ? (
+                              <TouchableOpacity
+                                activeOpacity={0.8}
+                                style={[styles.buttonBase, styles.buttonItemReady]}
+                                onPress={() => handleUpdateItemStatus(order._id, itemKey, 'READY')}
+                              >
+                                <Text style={styles.buttonText}>✓ Đã làm xong</Text>
+                              </TouchableOpacity>
+                            ) : null}
+                            {canRevertToPreparing ? (
+                              <TouchableOpacity
+                                activeOpacity={0.8}
+                                style={[styles.buttonBase, styles.buttonItemRevert]}
+                                onPress={() => handleUpdateItemStatus(order._id, itemKey, 'PREPARING')}
+                              >
+                                <Text style={styles.buttonTextSmall}>↩ Chưa xong, đang làm lại</Text>
+                              </TouchableOpacity>
+                            ) : null}
+                          </View>
+                        );
+                      })}
+
+                      {order.status === 'PENDING' ? (
+                        <View style={styles.rowSplit}>
+                          <TouchableOpacity activeOpacity={0.8} style={[styles.buttonBase, styles.buttonAmber, styles.flex1]} onPress={() => handleConfirmOrder(order)}>
+                            <Text style={styles.buttonText}>Xác nhận đơn</Text>
+                          </TouchableOpacity>
+                          <TouchableOpacity activeOpacity={0.8} style={[styles.buttonBase, styles.buttonSecondary, styles.flex1]} onPress={() => handleRejectOrder(order._id)}>
+                            <Text style={styles.buttonText}>Từ chối</Text>
+                          </TouchableOpacity>
                         </View>
-                        {canMarkReady ? (
-                          <TouchableOpacity
-                            activeOpacity={0.8}
-                            style={[styles.buttonBase, styles.buttonItemReady]}
-                            onPress={() => handleUpdateItemStatus(order._id, itemKey, 'READY')}
-                          >
-                            <Text style={styles.buttonText}>✓ Đã làm xong</Text>
-                          </TouchableOpacity>
-                        ) : null}
-                        {canRevertToPreparing ? (
-                          <TouchableOpacity
-                            activeOpacity={0.8}
-                            style={[styles.buttonBase, styles.buttonItemRevert]}
-                            onPress={() => handleUpdateItemStatus(order._id, itemKey, 'PREPARING')}
-                          >
-                            <Text style={styles.buttonTextSmall}>↩ Chưa xong, đang làm lại</Text>
-                          </TouchableOpacity>
-                        ) : null}
-                      </View>
-                    );
-                  })}
-                </View>
+                      ) : null}
+                    </View>
+                  ))}
 
-                {order.status === 'PENDING' ? (
-                  <View style={styles.rowSplit}>
-                    <TouchableOpacity activeOpacity={0.8} style={[styles.buttonBase, styles.buttonAmber, styles.flex1]} onPress={() => handleConfirmOrder(order)}>
-                      <Text style={styles.buttonText}>Xác nhận đơn</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity activeOpacity={0.8} style={[styles.buttonBase, styles.buttonSecondary, styles.flex1]} onPress={() => handleRejectOrder(order._id)}>
-                      <Text style={styles.buttonText}>Từ chối</Text>
-                    </TouchableOpacity>
-                  </View>
-                ) : null}
-
-                {order.status === 'IN_PROGRESS' ? (
-                  <TouchableOpacity activeOpacity={0.8} style={[styles.buttonBase, styles.buttonSuccess]} onPress={() => handleCheckout(order)}>
-                    <Text style={styles.buttonText}>Thanh toán ({(order.finalAmount || 0).toLocaleString()}d)</Text>
+                  <TouchableOpacity activeOpacity={0.8} style={[styles.buttonBase, styles.buttonSuccess]} onPress={() => handleCheckoutGroup(group)}>
+                    <Text style={styles.buttonText}>Xác nhận đã thanh toán thủ công ({group.totalAmount.toLocaleString()}d)</Text>
                   </TouchableOpacity>
-                ) : null}
-              </View>
-            ))
+                </View>
+              );
+            })
           )}
         </View>
       </ScrollView>
