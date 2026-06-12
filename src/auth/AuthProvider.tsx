@@ -159,7 +159,35 @@ export function AuthProvider({ children }: AuthProviderProps) {
       }
     });
 
+    const shouldShowCustomerAlerts = user.role === 'ADMIN' || user.role === 'MANAGER' || user.role === 'USER';
+    const getRequestLabel = (type?: string) => {
+      if (type === 'CALL_STAFF') return 'Khách gọi nhân viên';
+      if (type === 'PAY_CASH') return 'Khách yêu cầu thanh toán tiền mặt';
+      if (type === 'PAY_TRANSFER') return 'Khách yêu cầu thanh toán chuyển khoản';
+      if (type === 'PRINT_BILL') return 'Khách yêu cầu in hóa đơn có QR';
+      return 'Yêu cầu từ khách';
+    };
+
+    const handleCustomerRequest = (payload: any) => {
+      if (!shouldShowCustomerAlerts) return;
+      const tableName = payload?.tableName || 'Bàn';
+      const customerName = payload?.customerName ? ` - ${payload.customerName}` : '';
+      Alert.alert(getRequestLabel(payload?.type), `${tableName}${customerName}`);
+    };
+
+    const handlePaymentPaid = (payload: any) => {
+      if (!shouldShowCustomerAlerts) return;
+      const tableName = payload?.tableName || 'Bàn';
+      const amount = Number(payload?.amount || 0).toLocaleString('vi-VN');
+      Alert.alert('Đã nhận thanh toán', `${tableName} - ${amount}đ`);
+    };
+
+    socket.on('customerRequest', handleCustomerRequest);
+    socket.on('paymentPaid', handlePaymentPaid);
+
     return () => {
+      socket.off('customerRequest', handleCustomerRequest);
+      socket.off('paymentPaid', handlePaymentPaid);
       socket.disconnect();
       socketRef.current = null;
       setSocketReady(false);
