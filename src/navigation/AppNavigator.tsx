@@ -12,7 +12,8 @@ import { ChangePasswordScreen } from '../screens/auth/ChangePasswordScreen';
 import { AttendanceManagementScreen } from '../screens/attendance/AttendanceManagementScreen';
 import { InventoryScreen } from '../screens/inventory/InventoryScreen';
 import { MenuManagementScreen } from '../screens/menu/MenuManagementScreen';
-import { OrderScreen } from '../screens/orders/OrderScreen';
+import { KitchenScreen } from '../screens/orders/KitchenScreen';
+import { OrderScreen as StaffOrderScreen } from '../screens/orders/OrderScreen';
 import { PayrollManagementScreen } from '../screens/payroll/PayrollManagementScreen';
 import { ShiftScreen } from '../screens/shifts/ShiftScreen';
 import { StaffManagementScreen } from '../screens/staff/StaffManagementScreen';
@@ -31,7 +32,15 @@ export function AppNavigator() {
   const { token, user, requiresPasswordChange, socketReady, handleLogout } = useAuth();
 
   const tabRoleState = user ? getTabScreensForRole(user.role) : null;
-  const hasAnyTab = Boolean(tabRoleState && (tabRoleState.showShift || tabRoleState.showOrders || tabRoleState.showManagement));
+  const hasAnyTab = Boolean(
+    tabRoleState && (
+      tabRoleState.showShift ||
+      tabRoleState.showOrders ||
+      tabRoleState.showStaffWorkspace ||
+      tabRoleState.showKitchenQueue ||
+      tabRoleState.showManagement
+    ),
+  );
   const initialTabRoute = user ? getInitialTabRouteForRole(user.role) : undefined;
   const isAdminTabFlow = user ? isAdminDashboardRole(user.role) : false;
   const useSideTabs = width >= 900;
@@ -121,12 +130,14 @@ export function AppNavigator() {
               {tabRoleState?.showManagement ? <Tab.Screen name="Nhan Su" component={StaffManagementScreen} /> : null}
               {tabRoleState?.showManagement ? <Tab.Screen name="Cham Cong" component={AttendanceManagementScreen} /> : null}
               {tabRoleState?.showManagement ? <Tab.Screen name="Bang Luong" component={PayrollManagementScreen} /> : null}
-              {tabRoleState?.showOrders ? <Tab.Screen name="Don Hang" component={OrderScreen} /> : null}
+              {tabRoleState?.showStaffWorkspace ? <Tab.Screen name="Don Hang" component={StaffOrderScreen} /> : null}
+              {tabRoleState?.showKitchenQueue ? <Tab.Screen name="Bep" component={KitchenScreen} /> : null}
             </>
           ) : (
             <>
               {tabRoleState?.showShift ? <Tab.Screen name="Ca Lam" component={ShiftScreen} /> : null}
-              {tabRoleState?.showOrders ? <Tab.Screen name="Don Hang" component={OrderScreen} /> : null}
+              {tabRoleState?.showStaffWorkspace ? <Tab.Screen name="Phuc Vu" component={StaffOrderScreen} /> : null}
+              {tabRoleState?.showKitchenQueue ? <Tab.Screen name="Bep" component={KitchenScreen} /> : null}
             </>
           )}
         </Tab.Navigator>

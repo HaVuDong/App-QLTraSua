@@ -17,6 +17,7 @@ export function getOrderItemStatusLabel(status?: string) {
   if (status === 'PENDING') return 'Chờ làm';
   if (status === 'PREPARING') return 'Đang làm';
   if (status === 'READY') return 'Hoàn thành';
+  if (status === 'SERVED') return 'Đã phục vụ';
   if (status === 'CANCELLED') return 'Đã hủy';
   return status || '-';
 }

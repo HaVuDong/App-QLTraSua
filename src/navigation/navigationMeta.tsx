@@ -1,11 +1,20 @@
-import { Calendar, CheckCircle, Coffee, Home, Users } from 'lucide-react-native';
-import { ADMIN_DASHBOARD_ROLES, MANAGEMENT_ROLES, ORDER_ROLES, SHIFT_ROLES } from '../constants/roles';
+import { Calendar, ChefHat, CheckCircle, Coffee, Home, Users } from 'lucide-react-native';
+import {
+  ADMIN_DASHBOARD_ROLES,
+  KITCHEN_QUEUE_ROLES,
+  MANAGEMENT_ROLES,
+  ORDER_ROLES,
+  SHIFT_ROLES,
+  STAFF_WORKSPACE_ROLES,
+} from '../constants/roles';
 import type { SessionUser } from '../types/auth';
 
 export function getTabScreensForRole(role: SessionUser['role']) {
   return {
     showShift: SHIFT_ROLES.includes(role),
     showOrders: ORDER_ROLES.includes(role),
+    showStaffWorkspace: STAFF_WORKSPACE_ROLES.includes(role),
+    showKitchenQueue: KITCHEN_QUEUE_ROLES.includes(role),
     showManagement: MANAGEMENT_ROLES.includes(role),
   };
 }
@@ -16,6 +25,8 @@ export function isAdminDashboardRole(role: SessionUser['role']) {
 
 export function getInitialTabRouteForRole(role: SessionUser['role']) {
   if (MANAGEMENT_ROLES.includes(role)) return 'Quan Ly';
+  if (role === 'USER') return 'Phuc Vu';
+  if (role === 'KITCHEN') return 'Bep';
   if (SHIFT_ROLES.includes(role)) return 'Ca Lam';
   if (ORDER_ROLES.includes(role)) return 'Don Hang';
   return undefined;
@@ -31,6 +42,8 @@ export function getRouteMeta(routeName: string) {
     'Cham Cong': { label: 'Chấm công', subtitle: 'Ca làm, check-in và nghỉ phép' },
     'Bang Luong': { label: 'Bảng lương', subtitle: 'Lương tháng, phụ cấp và khấu trừ' },
     'Don Hang': { label: 'Đơn hàng', subtitle: 'Xác nhận, xử lý và thanh toán' },
+    'Phuc Vu': { label: 'Phục vụ', subtitle: 'Bàn, yêu cầu và thanh toán' },
+    Bep: { label: 'Bếp', subtitle: 'Món đang làm và sẵn sàng' },
     'Ca Lam': { label: 'Ca làm', subtitle: 'Đăng ký ca và chấm công cá nhân' },
   };
 
@@ -54,6 +67,8 @@ export function getUserInitial(user: SessionUser | null) {
 export function renderTabIcon(routeName: string, color: string, size: number) {
   if (routeName === 'Ca Lam') return <Calendar color={color} size={size} />;
   if (routeName === 'Don Hang') return <Coffee color={color} size={size} />;
+  if (routeName === 'Phuc Vu') return <Coffee color={color} size={size} />;
+  if (routeName === 'Bep') return <ChefHat color={color} size={size} />;
   if (routeName === 'Quan Ly') return <Users color={color} size={size} />;
   if (routeName === 'Nhan Su') return <Users color={color} size={size} />;
   if (routeName === 'Kho') return <Home color={color} size={size} />;

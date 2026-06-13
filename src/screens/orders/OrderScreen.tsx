@@ -5,9 +5,22 @@ import { ScreenBackdrop } from '../../components/common/ScreenBackdrop';
 import { runConfirmedAction } from '../../components/common/ConfirmAction';
 import { EmptyStateView, ErrorStateView, LoadingView, RestrictedStateView } from '../../components/StateViews';
 import { API_BASE_URL } from '../../config/api';
-import { ORDER_ROLES } from '../../constants/roles';
+import { STAFF_WORKSPACE_ROLES } from '../../constants/roles';
 import { getMenuAvailability, getMenuItems, checkMenuItemAvailability, type MenuAvailabilityResult, type MenuItem } from '../../services/menu';
-import { checkoutOrder, confirmOrder, createStaffOrder, getActiveOrders, rejectOrder, updateOrderItemStatus, type ActiveOrder, type CreateOrderItemInput } from '../../services/order';
+import {
+  confirmOrder,
+  createStaffOrder,
+  getActiveOrders,
+  getStaffWorkspace,
+  manualCheckoutTableSession,
+  rejectOrder,
+  updateCustomerRequestStatus,
+  updateOrderItemStatus,
+  type ActiveOrder,
+  type CreateOrderItemInput,
+  type CustomerRequest,
+  type StaffWorkspaceSession,
+} from '../../services/order';
 import { getTables, type DiningTable } from '../../services/table';
 import { styles } from '../../styles/appStyles';
 import { COLORS } from '../../theme';
@@ -15,6 +28,7 @@ import { getInventoryCategoryLabel, getOrderItemStatusLabel, getOrderStatusLabel
 
 interface ActiveOrderGroup {
   key: string;
+  sessionId?: string;
   tableLabel: string;
   tableStatus?: string;
   orders: ActiveOrder[];
@@ -27,6 +41,7 @@ interface ActiveOrderGroup {
 export function OrderScreen() {
   const { user, socketRef, socketReady } = useAuth();
   const [orders, setOrders] = useState<ActiveOrder[]>([]);
+  const [workspaceSessions, setWorkspaceSessions] = useState<StaffWorkspaceSession[]>([]);
   const [screenLoading, setScreenLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [loadError, setLoadError] = useState('');
@@ -107,8 +122,9 @@ export function OrderScreen() {
         setScreenLoading(true);
       }
       setLoadError('');
-      const data = await getActiveOrders();
-      setOrders(data);
+      const [activeOrders, staffWorkspace] = await Promise.all([getActiveOrders(), getStaffWorkspace()]);
+      setOrders(activeOrders);
+      setWorkspaceSessions(staffWorkspace);
     } catch (err: any) {
       setLoadError(err.response?.data?.message || 'Không thể tải danh sách đơn hàng');
     } finally {
@@ -177,12 +193,16 @@ export function OrderScreen() {
 
     const handleOrderCompleted = (order: any) => setOrders((prev) => prev.filter((o) => o._id !== order._id));
     const handleOrderRejected = (order: any) => setOrders((prev) => prev.filter((o) => o._id !== order._id));
+    const handleWorkspaceChanged = () => void fetchActiveOrders(true);
 
     socket.on('newQrOrder', handleNewOrder);
     socket.on('orderConfirmed', handleOrderConfirmed);
     socket.on('itemStatusChanged', handleItemStatusChanged);
     socket.on('orderCompleted', handleOrderCompleted);
     socket.on('orderRejected', handleOrderRejected);
+    socket.on('customerRequest', handleWorkspaceChanged);
+    socket.on('customerRequestUpdated', handleWorkspaceChanged);
+    socket.on('manualCheckoutCompleted', handleWorkspaceChanged);
 
     return () => {
       socket.off('newQrOrder', handleNewOrder);
@@ -190,15 +210,18 @@ export function OrderScreen() {
       socket.off('itemStatusChanged', handleItemStatusChanged);
       socket.off('orderCompleted', handleOrderCompleted);
       socket.off('orderRejected', handleOrderRejected);
+      socket.off('customerRequest', handleWorkspaceChanged);
+      socket.off('customerRequestUpdated', handleWorkspaceChanged);
+      socket.off('manualCheckoutCompleted', handleWorkspaceChanged);
     };
-  }, [socketReady, socketRef]);
+  }, [fetchActiveOrders, socketReady, socketRef]);
 
   const syncAfterAction = useCallback(() => {
     void fetchActiveOrders(true);
   }, [fetchActiveOrders]);
 
   const handleUpdateItemStatus = useCallback(
-    (orderId: string, itemId: string, status: 'READY' | 'PREPARING' | 'PENDING' | 'CANCELLED') => {
+    (orderId: string, itemId: string, status: 'READY' | 'SERVED' | 'PREPARING' | 'PENDING' | 'CANCELLED') => {
       runConfirmedAction({
         title: 'Xác nhận',
         message: 'Bạn muốn cập nhật trạng thái món này?',
@@ -322,8 +345,10 @@ export function OrderScreen() {
               const canContinue = await validateOrderAgainstLatestStock(order);
               if (!canContinue) return;
             }
-            for (const order of group.orders) {
-              await checkoutOrder(order._id, 0, 'FLAT');
+            if (group.sessionId) {
+              await manualCheckoutTableSession(group.sessionId, 0, 'FLAT');
+            } else {
+              throw new Error('Không tìm thấy phiên bàn để thanh toán');
             }
             syncAfterAction();
             Alert.alert('Thành công', `${group.tableLabel} đã được xác nhận thanh toán.`);
@@ -334,6 +359,42 @@ export function OrderScreen() {
       });
     },
     [mapOrderErrorMessage, syncAfterAction, validateOrderAgainstLatestStock],
+  );
+
+  const getRequestTypeLabel = useCallback((type: CustomerRequest['type']) => {
+    if (type === 'CALL_STAFF') return 'Gọi nhân viên';
+    if (type === 'PAY_CASH') return 'Thanh toán tiền mặt';
+    if (type === 'PAY_TRANSFER') return 'Thanh toán chuyển khoản';
+    if (type === 'PRINT_BILL') return 'In hóa đơn có QR';
+    return type;
+  }, []);
+
+  const getRequestStatusLabel = useCallback((status: CustomerRequest['status']) => {
+    if (status === 'PENDING') return 'Chờ xử lý';
+    if (status === 'ACKNOWLEDGED') return 'Đã nhận';
+    if (status === 'DONE') return 'Đã xong';
+    if (status === 'CANCELLED') return 'Đã hủy';
+    return status;
+  }, []);
+
+  const handleUpdateRequestStatus = useCallback(
+    (request: CustomerRequest, status: Exclude<CustomerRequest['status'], 'PENDING'>) => {
+      runConfirmedAction({
+        title: 'Cập nhật yêu cầu',
+        message: `Chuyển yêu cầu "${getRequestTypeLabel(request.type)}" sang "${getRequestStatusLabel(status)}"?`,
+        confirmText: getRequestStatusLabel(status),
+        destructive: status === 'CANCELLED',
+        onConfirm: async () => {
+          try {
+            await updateCustomerRequestStatus(request._id, status);
+            syncAfterAction();
+          } catch (err: any) {
+            Alert.alert('Lỗi', err.response?.data?.message || 'Không thể cập nhật yêu cầu');
+          }
+        },
+      });
+    },
+    [getRequestStatusLabel, getRequestTypeLabel, syncAfterAction],
   );
 
   const openCreateOrderForm = useCallback(() => {
@@ -475,7 +536,7 @@ export function OrderScreen() {
       const tableStatus = typeof order.tableId === 'string' ? undefined : order.tableId?.status;
       const key = sessionId || tableId || order._id;
       const activeItems = (order.items || []).filter((item: any) => item.status !== 'CANCELLED');
-      const readyItems = activeItems.filter((item: any) => item.status === 'READY');
+      const readyItems = activeItems.filter((item: any) => item.status === 'READY' || item.status === 'SERVED');
       const orderAmount = Number(order.finalAmount ?? order.totalAmount ?? 0);
 
       const existing = groupMap.get(key);
@@ -490,6 +551,7 @@ export function OrderScreen() {
 
       groupMap.set(key, {
         key,
+        sessionId,
         tableLabel,
         tableStatus,
         orders: [order],
@@ -503,7 +565,20 @@ export function OrderScreen() {
     return Array.from(groupMap.values());
   }, [orders]);
 
-  if (!user || !ORDER_ROLES.includes(user.role)) {
+  const pendingCustomerRequests = useMemo(
+    () =>
+      workspaceSessions.flatMap((session) =>
+        (session.requests || []).map((request) => ({
+          ...request,
+          tableLabel: session.table?.name || request.tableName || 'Mang đi',
+          customerName: session.customer?.name || request.customerName,
+          customerPhone: session.customer?.phone || request.customerPhone,
+        })),
+      ),
+    [workspaceSessions],
+  );
+
+  if (!user || !STAFF_WORKSPACE_ROLES.includes(user.role)) {
     return (
       <View style={styles.screenContainer}>
         <ScreenBackdrop />
@@ -517,55 +592,6 @@ export function OrderScreen() {
       <View style={styles.screenContainer}>
         <ScreenBackdrop />
         <LoadingView />
-      </View>
-    );
-  }
-
-  if (user.role === 'KITCHEN') {
-    const pendingItems: any[] = [];
-    orders
-      .filter((order) => order.status === 'IN_PROGRESS')
-      .forEach((order) => {
-        order.items.forEach((item: any) => {
-          if (item.status === 'PREPARING') {
-            const tableName = typeof order.tableId === 'string' ? 'Mang đi' : order.tableId?.name || 'Mang đi';
-            pendingItems.push({ orderId: order._id, table: tableName, ...item });
-          }
-        });
-      });
-
-    return (
-      <View style={styles.screenContainer}>
-        <ScreenBackdrop />
-        <ScrollView
-          style={styles.screenScroll}
-          contentContainerStyle={styles.screenContent}
-          showsVerticalScrollIndicator={false}
-          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => void fetchActiveOrders(true)} />}
-        >
-          <View style={styles.screenStack}>
-            <Text style={styles.sectionTitle}>Màn hình bếp</Text>
-            {loadError ? <ErrorStateView message={loadError} onRetry={() => void fetchActiveOrders()} /> : null}
-            {!loadError && pendingItems.length === 0 ? (
-              <EmptyStateView message="Không có món nào đang chờ." />
-            ) : (
-              pendingItems.map((pi, idx) => (
-                <View key={`${pi.orderId}-${pi._id || pi.itemId?._id}-${idx}`} style={[styles.glassCard, styles.kitchenCard]}>
-                  <Text style={styles.kitchenTableText}>Bàn: {pi.table}</Text>
-                  <Text style={styles.kitchenItemText}>{pi.quantity}x {pi.itemId?.name || 'Món'}</Text>
-                  {pi.note ? <Text style={styles.kitchenNote}>Ghi chú: {pi.note}</Text> : null}
-                  <TouchableOpacity
-                    activeOpacity={0.8}
-                    style={[styles.buttonBase, styles.buttonPrimary]}
-                    onPress={() => handleUpdateItemStatus(pi.orderId, pi._id || pi.itemId?._id, 'READY')}
-                  >
-                    <Text style={styles.buttonText}>Hoàn thành</Text>
-                  </TouchableOpacity>
-                </View>
-              ))
-            )}
-          </View>
-        </ScrollView>
       </View>
     );
   }
@@ -591,6 +617,45 @@ export function OrderScreen() {
               </TouchableOpacity>
             ) : null}
           </View>
+
+          {pendingCustomerRequests.length > 0 ? (
+            <View style={[styles.glassCard, styles.orderCard]}>
+              <Text style={styles.sectionTitle}>Yêu cầu khách</Text>
+              {pendingCustomerRequests.map((request) => (
+                <View key={request._id} style={styles.orderItems}>
+                  <View style={styles.orderHeader}>
+                    <Text style={styles.orderTableText}>{request.tableLabel}</Text>
+                    <View style={[styles.statusBadge, request.status === 'PENDING' ? styles.statusPending : styles.statusProgress]}>
+                      <Text style={styles.statusText}>{getRequestStatusLabel(request.status)}</Text>
+                    </View>
+                  </View>
+                  <Text style={styles.staffName}>{getRequestTypeLabel(request.type)}</Text>
+                  <Text style={styles.staffMeta}>
+                    {request.customerName || 'Khách'} {request.customerPhone ? `- ${request.customerPhone}` : ''}
+                  </Text>
+                  {request.message ? <Text style={styles.helperText}>{request.message}</Text> : null}
+                  <View style={styles.rowSplit}>
+                    {request.status === 'PENDING' ? (
+                      <TouchableOpacity
+                        activeOpacity={0.8}
+                        style={[styles.buttonBase, styles.buttonSecondary, styles.flex1]}
+                        onPress={() => handleUpdateRequestStatus(request, 'ACKNOWLEDGED')}
+                      >
+                        <Text style={styles.buttonText}>Đã nhận</Text>
+                      </TouchableOpacity>
+                    ) : null}
+                    <TouchableOpacity
+                      activeOpacity={0.8}
+                      style={[styles.buttonBase, styles.buttonSuccess, styles.flex1]}
+                      onPress={() => handleUpdateRequestStatus(request, 'DONE')}
+                    >
+                      <Text style={styles.buttonText}>Xong</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              ))}
+            </View>
+          ) : null}
 
           {showCreateOrderForm ? (
             <View style={[styles.glassCard, styles.formCard]}>
@@ -757,7 +822,7 @@ export function OrderScreen() {
                       </Text>
                       {order.items.map((item: any, index: number) => {
                         const itemStatusStyle =
-                          item.status === 'READY'
+                          item.status === 'READY' || item.status === 'SERVED'
                             ? styles.itemStatusReady
                             : item.status === 'PREPARING'
                               ? styles.itemStatusPreparing
@@ -766,8 +831,7 @@ export function OrderScreen() {
                                 : styles.itemStatusDefault;
 
                         const itemKey = item._id || item.itemId?._id || `${order._id}-${index}`;
-                        const canMarkReady = order.status === 'IN_PROGRESS' && item.status === 'PREPARING';
-                        const canRevertToPreparing = order.status === 'IN_PROGRESS' && item.status === 'READY';
+                        const canMarkServed = order.status === 'IN_PROGRESS' && item.status === 'READY';
 
                         return (
                           <View key={itemKey} style={styles.orderItemRowWrap}>
@@ -775,22 +839,13 @@ export function OrderScreen() {
                               <Text style={styles.orderItemText}>{item.quantity}x {item.itemId?.name || 'Món'}</Text>
                               <Text style={[styles.itemStatus, itemStatusStyle]}>{getOrderItemStatusLabel(item.status)}</Text>
                             </View>
-                            {canMarkReady ? (
+                            {canMarkServed ? (
                               <TouchableOpacity
                                 activeOpacity={0.8}
                                 style={[styles.buttonBase, styles.buttonItemReady]}
-                                onPress={() => handleUpdateItemStatus(order._id, itemKey, 'READY')}
+                                onPress={() => handleUpdateItemStatus(order._id, itemKey, 'SERVED')}
                               >
-                                <Text style={styles.buttonText}>✓ Đã làm xong</Text>
-                              </TouchableOpacity>
-                            ) : null}
-                            {canRevertToPreparing ? (
-                              <TouchableOpacity
-                                activeOpacity={0.8}
-                                style={[styles.buttonBase, styles.buttonItemRevert]}
-                                onPress={() => handleUpdateItemStatus(order._id, itemKey, 'PREPARING')}
-                              >
-                                <Text style={styles.buttonTextSmall}>↩ Chưa xong, đang làm lại</Text>
+                                <Text style={styles.buttonText}>✓ Đã phục vụ</Text>
                               </TouchableOpacity>
                             ) : null}
                           </View>
@@ -810,8 +865,17 @@ export function OrderScreen() {
                     </View>
                   ))}
 
-                  <TouchableOpacity activeOpacity={0.8} style={[styles.buttonBase, styles.buttonSuccess]} onPress={() => handleCheckoutGroup(group)}>
-                    <Text style={styles.buttonText}>Xác nhận đã thanh toán thủ công ({group.totalAmount.toLocaleString()}d)</Text>
+                  <TouchableOpacity
+                    activeOpacity={0.8}
+                    disabled={group.hasPending}
+                    style={[styles.buttonBase, group.hasPending ? styles.buttonSecondary : styles.buttonSuccess, group.hasPending ? styles.moduleCardDisabled : null]}
+                    onPress={() => handleCheckoutGroup(group)}
+                  >
+                    <Text style={styles.buttonText}>
+                      {group.hasPending
+                        ? 'Xác nhận đơn trước khi thanh toán'
+                        : `Xác nhận đã thanh toán thủ công (${group.totalAmount.toLocaleString()}d)`}
+                    </Text>
                   </TouchableOpacity>
                 </View>
               );
