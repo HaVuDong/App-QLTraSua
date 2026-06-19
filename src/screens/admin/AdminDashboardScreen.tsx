@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { RefreshControl, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
+import { Alert, Linking, RefreshControl, ScrollView, StyleSheet, Text, TouchableOpacity, useWindowDimensions, View } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { api } from '../../services/api';
 import { getActiveOrders, type ActiveOrder } from '../../services/order';
+import { createSaasPayosPayment, getBillingInfo, type BillingInfo } from '../../services/billing';
 import { MANAGEMENT_ROLES } from '../../constants/roles';
 import { formatCurrencyVnd } from '../../utils/format';
 import { useAuth } from '../../auth/AuthContext';
@@ -66,6 +67,8 @@ export default function AdminDashboardScreen() {
   const [dashboard, setDashboard] = useState<DashboardData | null>(null);
   const [hourlyRevenue, setHourlyRevenue] = useState<RevenueHourPoint[]>([]);
   const [activeOrders, setActiveOrders] = useState<ActiveOrder[]>([]);
+  const [billing, setBilling] = useState<BillingInfo | null>(null);
+  const [billingLoading, setBillingLoading] = useState(false);
   const [screenLoading, setScreenLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [loadError, setLoadError] = useState('');
@@ -84,15 +87,36 @@ export default function AdminDashboardScreen() {
       }
       setLoadError('');
 
-      const [dashboardRes, revenueRes, ordersRes] = await Promise.all([
-        api.get('/reports/dashboard'),
-        api.get('/reports/revenue-by-hour'),
-        getActiveOrders(),
+      const settle = async <T,>(promise: Promise<T>) => {
+        try {
+          return { ok: true as const, data: await promise };
+        } catch (error) {
+          return { ok: false as const, error };
+        }
+      };
+
+      const [dashboardRes, revenueRes, ordersRes, billingRes] = await Promise.all([
+        settle(api.get('/reports/dashboard')),
+        settle(api.get('/reports/revenue-by-hour')),
+        settle(getActiveOrders()),
+        settle(getBillingInfo()),
       ]);
 
-      setDashboard((dashboardRes.data || null) as DashboardData | null);
-      setHourlyRevenue(Array.isArray(revenueRes.data) ? (revenueRes.data as RevenueHourPoint[]) : []);
-      setActiveOrders(ordersRes);
+      if (billingRes.ok) {
+        setBilling(billingRes.data);
+      } else {
+        setBilling(null);
+      }
+
+      const operationalError = [dashboardRes, revenueRes, ordersRes].find((result) => !result.ok);
+      if (operationalError && !operationalError.ok) {
+        const error = operationalError.error as any;
+        setLoadError(error?.response?.data?.message || 'Khong the tai du lieu tong quan');
+      }
+
+      setDashboard(dashboardRes.ok ? ((dashboardRes.data.data || null) as DashboardData | null) : null);
+      setHourlyRevenue(revenueRes.ok && Array.isArray(revenueRes.data.data) ? (revenueRes.data.data as RevenueHourPoint[]) : []);
+      setActiveOrders(ordersRes.ok ? ordersRes.data : []);
     } catch (err: any) {
       setLoadError(err.response?.data?.message || 'Không thể tải dữ liệu tổng quan');
     } finally {
@@ -100,6 +124,23 @@ export default function AdminDashboardScreen() {
       setRefreshing(false);
     }
   }, []);
+
+  const handleCreateBillingPayment = useCallback(async () => {
+    try {
+      setBillingLoading(true);
+      const payment = await createSaasPayosPayment(1);
+      if (payment.checkoutUrl) {
+        await Linking.openURL(payment.checkoutUrl);
+      } else {
+        Alert.alert('Đã tạo thanh toán', `Mã thanh toán: ${payment.orderCode}`);
+      }
+      void fetchDashboardData(true);
+    } catch (err: any) {
+      Alert.alert('Lỗi', err.response?.data?.message || 'Không thể tạo thanh toán gói');
+    } finally {
+      setBillingLoading(false);
+    }
+  }, [fetchDashboardData]);
 
   useEffect(() => {
     void fetchDashboardData();
@@ -180,6 +221,25 @@ export default function AdminDashboardScreen() {
               <Text style={styles.subtitle}>Bảng điều khiển vận hành cửa hàng</Text>
             </View>
           </View>
+
+          {billing ? (
+            <View style={styles.billingCard}>
+              <View>
+                <Text style={styles.billingEyebrow}>Gói SaaS</Text>
+                <Text style={styles.billingTitle}>
+                  {billing.plan?.name || billing.subscription?.plan || 'Basic'} · {billing.subscription?.status || 'ACTIVE'}
+                </Text>
+                <Text style={styles.billingMeta}>
+                  Còn {billing.daysRemaining} ngày · Hạn: {billing.subscription?.endDate ? new Date(billing.subscription.endDate).toLocaleDateString('vi-VN') : '-'}
+                </Text>
+              </View>
+              {user.role === 'ADMIN' ? (
+                <TouchableOpacity activeOpacity={0.85} style={styles.billingButton} onPress={() => void handleCreateBillingPayment()}>
+                  <Text style={styles.billingButtonText}>{billingLoading ? 'Đang tạo...' : 'Thanh toán tháng'}</Text>
+                </TouchableOpacity>
+              ) : null}
+            </View>
+          ) : null}
 
           {loadError ? <ErrorStateView message={loadError} onRetry={() => void fetchDashboardData()} /> : null}
 
@@ -262,6 +322,49 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
     justifyContent: 'space-between',
     rowGap: 12,
+  },
+  billingCard: {
+    minHeight: 88,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: 'rgba(52,211,153,0.22)',
+    backgroundColor: 'rgba(15,23,42,0.78)',
+    padding: 18,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    columnGap: 14,
+  },
+  billingEyebrow: {
+    color: '#34D399',
+    fontSize: 11,
+    fontWeight: '900',
+    textTransform: 'uppercase',
+  },
+  billingTitle: {
+    color: '#F8FAFC',
+    fontSize: 18,
+    fontWeight: '900',
+    marginTop: 4,
+  },
+  billingMeta: {
+    color: '#94A3B8',
+    fontSize: 12,
+    fontWeight: '700',
+    marginTop: 4,
+  },
+  billingButton: {
+    minHeight: 46,
+    borderRadius: 14,
+    paddingHorizontal: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#10B981',
+  },
+  billingButtonText: {
+    color: '#F8FAFC',
+    fontSize: 13,
+    fontWeight: '900',
   },
   analyticsRow: {
     flexDirection: 'column',

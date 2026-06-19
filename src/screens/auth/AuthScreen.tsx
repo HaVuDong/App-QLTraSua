@@ -5,9 +5,9 @@ import { ScreenBackdrop } from '../../components/common/ScreenBackdrop';
 import { styles } from '../../styles/appStyles';
 import { COLORS } from '../../theme';
 
-export function AuthScreen() {
+export function AuthScreen({ route }: any) {
   const { handleLogin, handleVerifyDevice, error, loading, requiresOtp, deviceId, resetOtpFlow } = useAuth();
-  const [email, setEmail] = useState('');
+  const [email, setEmail] = useState(route?.params?.initialEmail || '');
   const [password, setPassword] = useState('');
   const [otpCode, setOtpCode] = useState('');
 

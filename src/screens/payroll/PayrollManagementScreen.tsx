@@ -1,12 +1,20 @@
 import { useCallback, useEffect, useState } from 'react';
-import { ActivityIndicator, Alert, RefreshControl, ScrollView, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Alert, Platform, RefreshControl, ScrollView, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { useAuth } from '../../auth/AuthContext';
 import { ScreenBackdrop } from '../../components/common/ScreenBackdrop';
 import { runConfirmedAction } from '../../components/common/ConfirmAction';
 import { EmptyStateView, ErrorStateView, LoadingView, RestrictedStateView } from '../../components/StateViews';
 import { MANAGEMENT_ROLES } from '../../constants/roles';
 import { getMonthlyAttendance, type MonthlyAttendanceData } from '../../services/attendance';
-import { calculatePayroll, getPayrollRecordDetail, getPayrollRecords, type PayrollRecord } from '../../services/payroll';
+import {
+  adjustPayroll,
+  calculatePayroll,
+  confirmPayroll,
+  exportPayroll,
+  getPayrollRecordDetail,
+  getPayrollRecords,
+  type PayrollRecord,
+} from '../../services/payroll';
 import { getStaffUsers, type StaffRole, type StaffStatus } from '../../services/staff';
 import { styles } from '../../styles/appStyles';
 import { COLORS } from '../../theme';
@@ -96,14 +104,24 @@ export function PayrollManagementScreen() {
   const [roleFilter, setRoleFilter] = useState<StaffFilterRole>('ALL');
   const [statusFilter, setStatusFilter] = useState<PayrollFilterStatus>('ALL');
   const [calculating, setCalculating] = useState(false);
+  const [confirming, setConfirming] = useState(false);
+  const [exporting, setExporting] = useState(false);
 
   const [detailUserId, setDetailUserId] = useState('');
   const [detailPayroll, setDetailPayroll] = useState<PayrollRecord | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState('');
+  const [adjusting, setAdjusting] = useState(false);
+  const [adjustmentNote, setAdjustmentNote] = useState('');
+  const [allowanceName, setAllowanceName] = useState('');
+  const [allowanceAmount, setAllowanceAmount] = useState('');
+  const [deductionName, setDeductionName] = useState('');
+  const [deductionAmount, setDeductionAmount] = useState('');
 
   const canViewPayroll = Boolean(user && MANAGEMENT_ROLES.includes(user.role));
   const canCalculatePayroll = user?.role === 'ADMIN';
+  const canManagePayroll = user?.role === 'ADMIN';
+  const canExportPayroll = Platform.OS === 'web' && Boolean(user && MANAGEMENT_ROLES.includes(user.role));
 
   const fetchPayrollData = useCallback(async (isRefresh = false) => {
     try {
@@ -125,9 +143,9 @@ export function PayrollManagementScreen() {
       } catch (err: any) {
         const statusCode = err?.response?.status;
         if (statusCode === 404) {
-          setPayrollApiNotice('Máy chủ chưa có API bảng lương riêng');
+          setPayrollApiNotice('Chua co ban ghi bang luong cho thang nay. Co the bam Tinh luong de tao du lieu.');
         } else {
-          setPayrollApiNotice('Không thể tải API bảng lương. Đang hiển thị lương tạm tính từ chấm công.');
+          setPayrollApiNotice('Khong the tai bang luong tu may chu. Dang hien thi luong tam tinh tu cham cong.');
         }
       }
 
@@ -239,6 +257,11 @@ export function PayrollManagementScreen() {
     setDetailUserId('');
     setDetailPayroll(null);
     setDetailError('');
+    setAdjustmentNote('');
+    setAllowanceName('');
+    setAllowanceAmount('');
+    setDeductionName('');
+    setDeductionAmount('');
   }, [appliedMonth]);
 
   useEffect(() => {
@@ -276,6 +299,96 @@ export function PayrollManagementScreen() {
     });
   }, [appliedMonth, canCalculatePayroll, fetchPayrollData]);
 
+  const handleConfirmPayroll = useCallback(() => {
+    if (!canManagePayroll) return;
+
+    runConfirmedAction({
+      title: 'Xac nhan bang luong',
+      message: `Xac nhan bang luong thang ${appliedMonth}?`,
+      confirmText: 'Xac nhan',
+      onConfirm: async () => {
+        try {
+          setConfirming(true);
+          const result = await confirmPayroll(appliedMonth);
+          Alert.alert('Thanh cong', result?.message || `Da xac nhan bang luong thang ${appliedMonth}`);
+          void fetchPayrollData(true);
+        } catch (err: any) {
+          Alert.alert('Loi', err.response?.data?.message || 'Khong the xac nhan bang luong');
+        } finally {
+          setConfirming(false);
+        }
+      },
+    });
+  }, [appliedMonth, canManagePayroll, fetchPayrollData]);
+
+  const handleExportPayroll = useCallback(async () => {
+    if (!canExportPayroll) {
+      Alert.alert('Thong bao', 'Xuat file ho tro tren web quan ly.');
+      return;
+    }
+
+    try {
+      setExporting(true);
+      const blob = await exportPayroll(appliedMonth);
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = `payroll_${appliedMonth}.xlsx`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(url);
+    } catch (err: any) {
+      Alert.alert('Loi', err.response?.data?.message || 'Khong the xuat bang luong');
+    } finally {
+      setExporting(false);
+    }
+  }, [appliedMonth, canExportPayroll]);
+
+  const handleAdjustPayroll = useCallback(async () => {
+    if (!canManagePayroll || !detailPayroll?._id) return;
+
+    const allowanceValue = Number(allowanceAmount || 0);
+    const deductionValue = Number(deductionAmount || 0);
+    if ((allowanceAmount && (!Number.isFinite(allowanceValue) || allowanceValue < 0)) ||
+      (deductionAmount && (!Number.isFinite(deductionValue) || deductionValue < 0))) {
+      Alert.alert('Loi', 'So tien dieu chinh phai la so khong am');
+      return;
+    }
+
+    try {
+      setAdjusting(true);
+      const nextPayroll = await adjustPayroll(detailPayroll._id, {
+        allowances: allowanceValue > 0 ? [{ name: allowanceName.trim() || 'Dieu chinh phu cap', amount: allowanceValue }] : [],
+        deductions: deductionValue > 0 ? [{ name: deductionName.trim() || 'Dieu chinh khau tru', amount: deductionValue }] : [],
+        adjustmentNote: adjustmentNote.trim() || undefined,
+      });
+      if (nextPayroll) {
+        setDetailPayroll(nextPayroll);
+      }
+      setAllowanceName('');
+      setAllowanceAmount('');
+      setDeductionName('');
+      setDeductionAmount('');
+      setAdjustmentNote('');
+      Alert.alert('Thanh cong', 'Da luu dieu chinh bang luong');
+      void fetchPayrollData(true);
+    } catch (err: any) {
+      Alert.alert('Loi', err.response?.data?.message || 'Khong the dieu chinh bang luong');
+    } finally {
+      setAdjusting(false);
+    }
+  }, [
+    adjustmentNote,
+    allowanceAmount,
+    allowanceName,
+    canManagePayroll,
+    deductionAmount,
+    deductionName,
+    detailPayroll,
+    fetchPayrollData,
+  ]);
+
   const openPayrollDetail = useCallback(async (row: PayrollViewRow) => {
     setDetailUserId(row.userId);
     setDetailPayroll(row.payrollRecord);
@@ -290,7 +403,7 @@ export function PayrollManagementScreen() {
     } catch (err: any) {
       const statusCode = err?.response?.status;
       if (statusCode === 404) {
-        setDetailError('Máy chủ chưa có API bảng lương riêng');
+        setDetailError('Chua co ban ghi bang luong cho nhan vien nay trong thang da chon.');
       } else {
         setDetailError(err.response?.data?.message || 'Không thể tải chi tiết lương');
       }
@@ -368,6 +481,23 @@ export function PayrollManagementScreen() {
                   <Text style={styles.buttonText}>Chỉ xem (Manager)</Text>
                 </TouchableOpacity>
               )}
+            </View>
+
+            <View style={styles.rowSplit}>
+              {canManagePayroll ? (
+                <TouchableOpacity activeOpacity={0.8} style={[styles.buttonBase, styles.buttonSecondary, styles.flex1]} onPress={handleConfirmPayroll}>
+                  {confirming ? <ActivityIndicator color={COLORS.text} /> : <Text style={styles.buttonText}>Xac nhan thang</Text>}
+                </TouchableOpacity>
+              ) : null}
+
+              <TouchableOpacity
+                activeOpacity={0.8}
+                style={[styles.buttonBase, styles.buttonSecondary, styles.flex1, !canExportPayroll ? styles.moduleCardDisabled : null]}
+                onPress={() => void handleExportPayroll()}
+                disabled={exporting}
+              >
+                {exporting ? <ActivityIndicator color={COLORS.text} /> : <Text style={styles.buttonText}>{canExportPayroll ? 'Xuat Excel' : 'Xuat tren web'}</Text>}
+              </TouchableOpacity>
             </View>
 
             <TextInput
@@ -476,7 +606,7 @@ export function PayrollManagementScreen() {
                           Lương từ máy chủ: {formatCurrencyVnd(row.payrollRecord.finalSalary || 0)} ({getPayrollBackendStatusLabel(row.payrollRecord.status)})
                         </Text>
                       ) : (
-                        <Text style={styles.staffMeta}>Máy chủ chưa có API bảng lương riêng</Text>
+                        <Text style={styles.staffMeta}>Chua co ban ghi luong tu may chu trong thang nay</Text>
                       )}
                     </View>
                     <View style={[styles.statusBadge, statusStyle]}>
@@ -529,7 +659,7 @@ export function PayrollManagementScreen() {
                 selectedRow.penaltyRecords.map((penalty, idx) => (
                   <View key={`${selectedRow.userId}-penalty-${idx}`} style={[styles.glassCard, styles.staffCard]}>
                     <Text style={styles.staffMeta}>Ngày: {formatPenaltyDateLabel(penalty.date)}</Text>
-                    <Text style={styles.staffMeta}>Giờ vào ca: Máy chủ chưa hỗ trợ</Text>
+                    <Text style={styles.staffMeta}>Gio vao ca: Chua co du lieu ca lam</Text>
                     <Text style={styles.staffMeta}>Giờ check-in: {formatDateTime(penalty.checkInTime)}</Text>
                     <Text style={styles.staffMeta}>Đi trễ: {penalty.lateMinutes} phút</Text>
                     <Text style={styles.staffMeta}>Khoản trừ đi trễ: {formatCurrencyVnd(penalty.penaltyAmount)}</Text>
@@ -540,10 +670,51 @@ export function PayrollManagementScreen() {
                 ))
               )}
 
-              <TouchableOpacity activeOpacity={1} disabled style={[styles.buttonBase, styles.buttonSecondary, styles.moduleCardDisabled]}>
-                <Text style={styles.buttonText}>Xóa khoản trừ đi trễ</Text>
-              </TouchableOpacity>
-              <Text style={styles.helperText}>Máy chủ chưa hỗ trợ xóa khoản trừ lương</Text>
+              {canManagePayroll && detailPayroll ? (
+                <View style={[styles.glassCard, styles.disabledBlock]}>
+                  <Text style={styles.sectionTitle}>Dieu chinh bang luong</Text>
+                  <TextInput
+                    placeholder="Ten phu cap"
+                    value={allowanceName}
+                    onChangeText={setAllowanceName}
+                    placeholderTextColor={COLORS.textMuted}
+                    style={styles.input}
+                  />
+                  <TextInput
+                    placeholder="So tien phu cap"
+                    value={allowanceAmount}
+                    onChangeText={setAllowanceAmount}
+                    keyboardType="numeric"
+                    placeholderTextColor={COLORS.textMuted}
+                    style={styles.input}
+                  />
+                  <TextInput
+                    placeholder="Ten khau tru"
+                    value={deductionName}
+                    onChangeText={setDeductionName}
+                    placeholderTextColor={COLORS.textMuted}
+                    style={styles.input}
+                  />
+                  <TextInput
+                    placeholder="So tien khau tru"
+                    value={deductionAmount}
+                    onChangeText={setDeductionAmount}
+                    keyboardType="numeric"
+                    placeholderTextColor={COLORS.textMuted}
+                    style={styles.input}
+                  />
+                  <TextInput
+                    placeholder="Ghi chu dieu chinh"
+                    value={adjustmentNote}
+                    onChangeText={setAdjustmentNote}
+                    placeholderTextColor={COLORS.textMuted}
+                    style={styles.input}
+                  />
+                  <TouchableOpacity activeOpacity={0.8} style={[styles.buttonBase, styles.buttonPrimary]} onPress={() => void handleAdjustPayroll()}>
+                    {adjusting ? <ActivityIndicator color={COLORS.text} /> : <Text style={styles.buttonText}>Luu dieu chinh</Text>}
+                  </TouchableOpacity>
+                </View>
+              ) : null}
 
               <Text style={styles.sectionTitle}>Bản ghi chấm công dùng để tính lương</Text>
               {detailAttendanceRecords.length === 0 ? (
@@ -575,6 +746,11 @@ export function PayrollManagementScreen() {
                   setDetailUserId('');
                   setDetailPayroll(null);
                   setDetailError('');
+                  setAdjustmentNote('');
+                  setAllowanceName('');
+                  setAllowanceAmount('');
+                  setDeductionName('');
+                  setDeductionAmount('');
                 }}
               >
                 <Text style={styles.buttonText}>Đóng chi tiết</Text>

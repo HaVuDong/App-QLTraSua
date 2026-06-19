@@ -15,6 +15,7 @@ import { MenuManagementScreen } from '../screens/menu/MenuManagementScreen';
 import { KitchenScreen } from '../screens/orders/KitchenScreen';
 import { OrderScreen as StaffOrderScreen } from '../screens/orders/OrderScreen';
 import { PayrollManagementScreen } from '../screens/payroll/PayrollManagementScreen';
+import { PublicLandingScreen } from '../screens/public/PublicLandingScreen';
 import { ShiftScreen } from '../screens/shifts/ShiftScreen';
 import { StaffManagementScreen } from '../screens/staff/StaffManagementScreen';
 import { SystemOwnerScreen } from '../screens/system-owner/SystemOwnerScreen';
@@ -62,6 +63,7 @@ export function AppNavigator() {
     >
       {!token && !requiresPasswordChange ? (
         <Stack.Navigator screenOptions={{ headerShown: false }}>
+          <Stack.Screen name="Landing" component={PublicLandingScreen} />
           <Stack.Screen name="Auth" component={AuthScreen} />
         </Stack.Navigator>
       ) : requiresPasswordChange ? (

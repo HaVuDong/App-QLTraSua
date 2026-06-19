@@ -8,6 +8,7 @@ import { api } from '../../services/api';
 import { styles } from '../../styles/appStyles';
 import { COLORS } from '../../theme';
 import { getTenantStatusLabel } from '../../utils/displayLabels';
+import { formatCurrencyVnd } from '../../utils/format';
 import { parseStaffEmail, parseStaffPhone } from '../../utils/staffForms';
 type TenantFormStatus = 'ACTIVE' | 'SUSPENDED';
 
@@ -184,6 +185,49 @@ export function SystemOwnerScreen() {
       });
     },
     [fetchTenants],
+  );
+
+  const renewTenant = useCallback(
+    (tenant: any) => {
+      runConfirmedAction({
+        title: 'Gia hạn gói',
+        message: `Gia hạn ${tenant.name} thêm 1 tháng?`,
+        confirmText: 'Gia hạn',
+        onConfirm: async () => {
+          try {
+            await api.post(`/tenants/${tenant._id}/renew`, {
+              months: 1,
+              amount: Number(tenant.subscription?.amount || 0),
+              performedBy: user?.userId,
+              notes: 'Manual renewal from System Owner',
+            });
+            void fetchTenants(true);
+          } catch (err: any) {
+            Alert.alert('Lỗi', err.response?.data?.message || 'Không thể gia hạn khách hàng');
+          }
+        },
+      });
+    },
+    [fetchTenants, user?.userId],
+  );
+
+  const resetTenantAdminPassword = useCallback(
+    (tenant: any) => {
+      runConfirmedAction({
+        title: 'Reset mật khẩu admin',
+        message: `Tạo mật khẩu tạm thời mới cho admin của ${tenant.name}?`,
+        confirmText: 'Reset',
+        onConfirm: async () => {
+          try {
+            const res = await api.post(`/tenants/${tenant._id}/reset-admin-password`);
+            Alert.alert('Mật khẩu tạm thời', res.data?.tempPassword || 'Đã reset mật khẩu admin.');
+          } catch (err: any) {
+            Alert.alert('Lỗi', err.response?.data?.message || 'Không thể reset mật khẩu admin');
+          }
+        },
+      });
+    },
+    [],
   );
 
   if (!user || user.role !== 'SYSTEM_OWNER') {
@@ -375,15 +419,32 @@ export function SystemOwnerScreen() {
                 <Text style={styles.historyText}>Trạng thái: {getTenantStatusLabel(tenant.status)}</Text>
                 <Text style={styles.historyText}>Chủ sở hữu: {tenant.ownerName || '-'}</Text>
                 <Text style={styles.historyText}>Email admin/khách hàng: {tenant.email || '-'}</Text>
+                <Text style={styles.historyText}>
+                  Gói: {tenant.subscription?.plan || '-'} · {tenant.subscription?.status || 'ACTIVE'} · {formatCurrencyVnd(Number(tenant.subscription?.amount || 0))}/tháng
+                </Text>
+                <Text style={styles.historyText}>
+                  Hạn dùng: {tenant.subscription?.endDate ? new Date(tenant.subscription.endDate).toLocaleDateString('vi-VN') : '-'}
+                  {tenant.subscription?.trialEndsAt ? ` · Trial: ${new Date(tenant.subscription.trialEndsAt).toLocaleDateString('vi-VN')}` : ''}
+                </Text>
 
                 {tenant.status === 'DELETED' ? null : (
-                  <TouchableOpacity
-                    activeOpacity={0.8}
-                    style={[styles.buttonBase, tenant.status === 'SUSPENDED' ? styles.buttonPrimary : styles.buttonAmber, styles.buttonTopSpace]}
-                    onPress={() => toggleTenantLock(tenant._id, tenant.status)}
-                  >
-                    <Text style={styles.buttonText}>{tenant.status === 'SUSPENDED' ? 'Mở khóa khách hàng' : 'Khóa khách hàng'}</Text>
-                  </TouchableOpacity>
+                  <View style={styles.buttonTopSpace}>
+                    <TouchableOpacity
+                      activeOpacity={0.8}
+                      style={[styles.buttonBase, tenant.status === 'SUSPENDED' ? styles.buttonPrimary : styles.buttonAmber]}
+                      onPress={() => toggleTenantLock(tenant._id, tenant.status)}
+                    >
+                      <Text style={styles.buttonText}>{tenant.status === 'SUSPENDED' ? 'Mở khóa khách hàng' : 'Khóa khách hàng'}</Text>
+                    </TouchableOpacity>
+                    <View style={[styles.rowSplit, styles.buttonTopSpace]}>
+                      <TouchableOpacity activeOpacity={0.8} style={[styles.buttonBase, styles.buttonPrimary, styles.flex1]} onPress={() => renewTenant(tenant)}>
+                        <Text style={styles.buttonText}>Gia hạn 1 tháng</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity activeOpacity={0.8} style={[styles.buttonBase, styles.buttonSecondary, styles.flex1]} onPress={() => resetTenantAdminPassword(tenant)}>
+                        <Text style={styles.buttonText}>Reset admin</Text>
+                      </TouchableOpacity>
+                    </View>
+                  </View>
                 )}
               </View>
             ))

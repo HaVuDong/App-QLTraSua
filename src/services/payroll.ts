@@ -47,6 +47,12 @@ export interface PayrollRecord {
   updatedAt?: string;
 }
 
+export interface PayrollAdjustmentPayload {
+  allowances?: PayrollAllowance[];
+  deductions?: PayrollDeduction[];
+  adjustmentNote?: string;
+}
+
 export async function calculatePayroll(month: string) {
   const res = await api.post('/attendance/payroll/calculate', undefined, { params: { month } });
   return (res.data || null) as { status?: string; message?: string; jobId?: string } | null;
@@ -60,4 +66,22 @@ export async function getPayrollRecords(month: string) {
 export async function getPayrollRecordDetail(userId: string, month: string) {
   const res = await api.get(`/attendance/payroll/detail/${userId}`, { params: { month } });
   return (res.data || null) as PayrollRecord | null;
+}
+
+export async function adjustPayroll(payrollId: string, payload: PayrollAdjustmentPayload) {
+  const res = await api.patch(`/attendance/payroll/${payrollId}/adjust`, payload);
+  return (res.data || null) as PayrollRecord | null;
+}
+
+export async function confirmPayroll(month: string) {
+  const res = await api.post('/attendance/payroll/confirm', undefined, { params: { month } });
+  return res.data as { message?: string; modifiedCount?: number };
+}
+
+export async function exportPayroll(month: string) {
+  const res = await api.get('/attendance/payroll/export', {
+    params: { month },
+    responseType: 'blob',
+  });
+  return res.data as Blob;
 }
