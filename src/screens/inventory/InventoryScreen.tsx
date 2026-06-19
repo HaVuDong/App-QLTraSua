@@ -1,11 +1,21 @@
 import { useCallback, useEffect, useState } from 'react';
-import { ActivityIndicator, Alert, RefreshControl, ScrollView, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Alert, Platform, RefreshControl, ScrollView, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { useAuth } from '../../auth/AuthContext';
 import { ScreenBackdrop } from '../../components/common/ScreenBackdrop';
 import { runConfirmedAction } from '../../components/common/ConfirmAction';
 import { EmptyStateView, ErrorStateView, LoadingView, RestrictedStateView } from '../../components/StateViews';
 import { MANAGEMENT_ROLES } from '../../constants/roles';
-import { createInventoryItem, deleteInventoryItem, getInventoryItems, getInventoryStatusSummary, updateInventoryItem, type InventoryCategory, type InventoryItem } from '../../services/inventory';
+import {
+  createInventoryItem,
+  deleteInventoryItem,
+  downloadInventoryImportTemplate,
+  getInventoryItems,
+  getInventoryStatusSummary,
+  importInventoryItemsExcel,
+  updateInventoryItem,
+  type InventoryCategory,
+  type InventoryItem,
+} from '../../services/inventory';
 import { styles } from '../../styles/appStyles';
 import { COLORS } from '../../theme';
 import { formatCurrencyVnd } from '../../utils/format';
@@ -23,6 +33,7 @@ export function InventoryScreen() {
   const [screenLoading, setScreenLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [loadError, setLoadError] = useState('');
+  const [excelImporting, setExcelImporting] = useState(false);
 
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<InventoryFilterStatus>('ALL');
@@ -238,6 +249,67 @@ export function InventoryScreen() {
     }
   }, [adjustAmount, adjustReason, adjustType, adjustingItem, fetchInventoryData]);
 
+  const downloadImportTemplate = useCallback(async () => {
+    if (Platform.OS !== 'web') {
+      Alert.alert('Thong bao', 'Tai mau Excel ho tro tren web quan ly.');
+      return;
+    }
+
+    try {
+      const blob = await downloadInventoryImportTemplate();
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = 'mau_nhap_nguyen_lieu.xlsx';
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(url);
+    } catch (err: any) {
+      Alert.alert('Khong the tai mau', err.response?.data?.message || 'Tai file mau Excel that bai');
+    }
+  }, []);
+
+  const importFromExcel = useCallback(async () => {
+    if (Platform.OS !== 'web') {
+      Alert.alert('Thong bao', 'Nhap Excel ho tro tren web quan ly.');
+      return;
+    }
+
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+    input.onchange = async () => {
+      const file = input.files?.[0];
+      if (!file) {
+        return;
+      }
+
+      setExcelImporting(true);
+      try {
+        const result = await importInventoryItemsExcel(file);
+        Alert.alert(
+          'Nhap Excel thanh cong',
+          `Da tao ${result.createdCount} nguyen lieu moi, cap nhat ${result.updatedCount} nguyen lieu da co. Tong so luong nhap: ${result.stockImportedQuantity}.`,
+        );
+        void fetchInventoryData(true);
+      } catch (err: any) {
+        const backendErrors = err.response?.data?.errors;
+        const detail = Array.isArray(backendErrors)
+          ? backendErrors
+              .slice(0, 8)
+              .map((item: any) => `Dong ${item.row}: ${item.message}`)
+              .join('\n')
+          : err.response?.data?.message || 'Nhap Excel that bai';
+        const suffix = Array.isArray(backendErrors) && backendErrors.length > 8 ? `\n...va ${backendErrors.length - 8} loi khac` : '';
+        Alert.alert('Khong the nhap Excel', `${detail}${suffix}`);
+      } finally {
+        setExcelImporting(false);
+      }
+    };
+    input.click();
+  }, [fetchInventoryData]);
+
   if (!user || !MANAGEMENT_ROLES.includes(user.role)) {
     return (
       <View style={styles.screenContainer}>
@@ -320,6 +392,19 @@ export function InventoryScreen() {
             <TouchableOpacity activeOpacity={0.8} style={[styles.buttonBase, styles.buttonPrimary]} onPress={openCreateForm}>
               <Text style={styles.buttonText}>Thêm nguyên liệu</Text>
             </TouchableOpacity>
+            <View style={styles.rowSplit}>
+              <TouchableOpacity activeOpacity={0.8} style={[styles.buttonBase, styles.buttonSecondary, styles.flex1]} onPress={() => void downloadImportTemplate()}>
+                <Text style={styles.buttonText}>Tải mẫu Excel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                activeOpacity={0.8}
+                style={[styles.buttonBase, styles.buttonSecondary, styles.flex1, excelImporting ? styles.moduleCardDisabled : null]}
+                onPress={() => void importFromExcel()}
+                disabled={excelImporting}
+              >
+                {excelImporting ? <ActivityIndicator color={COLORS.text} /> : <Text style={styles.buttonText}>Nhập Excel</Text>}
+              </TouchableOpacity>
+            </View>
           </View>
 
           {formMode ? (
