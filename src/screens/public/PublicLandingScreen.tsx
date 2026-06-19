@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, Alert, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Alert, Modal, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { ArrowRight, CheckCircle, Coffee, CreditCard, QrCode, Users } from 'lucide-react-native';
 import { ScreenBackdrop } from '../../components/common/ScreenBackdrop';
 import {
@@ -296,8 +296,14 @@ export function PublicLandingScreen({ navigation }: any) {
             })}
           </View>
 
-          {signupVisible ? (
-            <View style={[appStyles.glassCard, localStyles.signupCard]}>
+          <Modal visible={signupVisible} transparent animationType="fade" onRequestClose={resetSignup}>
+            <View style={localStyles.modalBackdrop}>
+              <ScrollView
+                contentContainerStyle={localStyles.modalScrollContent}
+                keyboardShouldPersistTaps="handled"
+                showsVerticalScrollIndicator={false}
+              >
+                <View style={[appStyles.glassCard, localStyles.signupCard, localStyles.signupModalCard]}>
               <View style={localStyles.signupHeader}>
                 <Text style={appStyles.sectionTitle}>Đăng ký cửa hàng</Text>
                 <TouchableOpacity activeOpacity={0.8} onPress={resetSignup}>
@@ -387,8 +393,10 @@ export function PublicLandingScreen({ navigation }: any) {
                   </TouchableOpacity>
                 </View>
               ) : null}
+                </View>
+              </ScrollView>
             </View>
-          ) : null}
+          </Modal>
         </View>
       </ScrollView>
     </View>
@@ -492,6 +500,20 @@ const localStyles = StyleSheet.create({
   },
   signupCard: {
     rowGap: SPACING.md,
+  },
+  signupModalCard: {
+    width: '100%',
+    maxWidth: 760,
+    alignSelf: 'center',
+  },
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(2,6,23,0.82)',
+  },
+  modalScrollContent: {
+    flexGrow: 1,
+    justifyContent: 'center',
+    padding: SPACING.xl,
   },
   signupHeader: {
     flexDirection: 'row',
