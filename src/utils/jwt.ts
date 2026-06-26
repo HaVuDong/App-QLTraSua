@@ -1,25 +1,26 @@
-import type { JwtPayload, SessionUser } from '../types/auth';
-import { isUserRole } from '../constants/roles';
+import type { JwtPayload, SessionUser, UserPermission } from "../types/auth";
+import { isUserRole } from "../constants/roles";
+import { isUserPermission } from "./permissions";
 
 function decodeBase64(base64Value: string) {
-  if (typeof globalThis.atob === 'function') {
+  if (typeof globalThis.atob === "function") {
     return globalThis.atob(base64Value);
   }
-  if (typeof Buffer !== 'undefined') {
-    return Buffer.from(base64Value, 'base64').toString('utf8');
+  if (typeof Buffer !== "undefined") {
+    return Buffer.from(base64Value, "base64").toString("utf8");
   }
-  throw new Error('No base64 decoder available');
+  throw new Error("No base64 decoder available");
 }
 
 function decodeBase64Url(base64Url: string) {
-  const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+  const base64 = base64Url.replace(/-/g, "+").replace(/_/g, "/");
   const padLength = (4 - (base64.length % 4)) % 4;
-  return decodeBase64(base64 + '='.repeat(padLength));
+  return decodeBase64(base64 + "=".repeat(padLength));
 }
 
 export function parseJwt(token: string): JwtPayload | null {
   try {
-    const parts = token.split('.');
+    const parts = token.split(".");
     if (parts.length !== 3) return null;
     const json = decodeBase64Url(parts[1]);
     return JSON.parse(json) as JwtPayload;
@@ -36,12 +37,26 @@ export function isTokenExpired(payload: JwtPayload, skewSeconds = 30) {
 
 export function userFromTokenPayload(payload: JwtPayload): SessionUser | null {
   if (!payload.sub || !isUserRole(payload.role)) return null;
+  let effectivePermissions: UserPermission[] | undefined;
+  if (Array.isArray(payload.effectivePermissions)) {
+    effectivePermissions = [];
+    for (const permission of payload.effectivePermissions) {
+      if (isUserPermission(permission)) {
+        effectivePermissions.push(permission);
+      }
+    }
+  }
+
   return {
     userId: payload.sub,
     email: payload.email,
     phone: payload.phone,
     role: payload.role,
     tenantId: payload.tenantId ?? null,
+    effectivePermissions,
+    permissionVersion:
+      typeof payload.permissionVersion === "number"
+        ? payload.permissionVersion
+        : undefined,
   };
 }
-

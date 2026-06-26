@@ -1,33 +1,75 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Alert, StatusBar, View } from 'react-native';
-import { io } from 'socket.io-client';
-import { LoadingView } from '../components/StateViews';
-import { ScreenBackdrop } from '../components/common/ScreenBackdrop';
-import { API_BASE_URL } from '../config/api';
-import { api, attachApiInterceptors, setApiToken } from '../services/api';
-import { clearAccessToken, getOrCreateDeviceId, loadAccessToken, saveAccessToken } from '../storage/session';
-import { styles } from '../styles/appStyles';
-import type { SessionUser } from '../types/auth';
-import { isTokenExpired, parseJwt, userFromTokenPayload } from '../utils/jwt';
-import { VALID_ROLES } from '../constants/roles';
-import { AuthContext, type AuthContextValue } from './AuthContext';
+import React, { useCallback, useEffect, useRef, useState } from "react";
+import { Alert, AppState, StatusBar, View } from "react-native";
+import { io } from "socket.io-client";
+import { LoadingView } from "../components/StateViews";
+import { ScreenBackdrop } from "../components/common/ScreenBackdrop";
+import { API_BASE_URL } from "../config/api";
+import { api, attachApiInterceptors, setApiToken } from "../services/api";
+import {
+  clearAccessToken,
+  getOrCreateDeviceId,
+  loadAccessToken,
+  saveAccessToken,
+} from "../storage/session";
+import { styles } from "../styles/appStyles";
+import type { SessionUser, UserPermission } from "../types/auth";
+import { isTokenExpired, parseJwt, userFromTokenPayload } from "../utils/jwt";
+import { isUserRole, VALID_ROLES } from "../constants/roles";
+import { isUserPermission } from "../utils/permissions";
+import { AuthContext, type AuthContextValue } from "./AuthContext";
 
 type AuthProviderProps = {
   children: React.ReactNode;
 };
 
+type PermissionSnapshot = {
+  userId?: string;
+  role?: string;
+  tenantId?: string | null;
+  effectivePermissions?: unknown;
+  permissionVersion?: unknown;
+};
+
+function normalizePermissionSnapshot(
+  currentUser: SessionUser,
+  snapshot: PermissionSnapshot,
+) {
+  if (!snapshot || snapshot.userId !== currentUser.userId) {
+    return currentUser;
+  }
+
+  let effectivePermissions: UserPermission[] | undefined;
+  if (Array.isArray(snapshot.effectivePermissions)) {
+    effectivePermissions =
+      snapshot.effectivePermissions.filter(isUserPermission);
+  }
+
+  const nextVersion = Number(snapshot.permissionVersion);
+
+  return {
+    ...currentUser,
+    role: isUserRole(snapshot.role) ? snapshot.role : currentUser.role,
+    tenantId: snapshot.tenantId ?? currentUser.tenantId ?? null,
+    effectivePermissions:
+      effectivePermissions ?? currentUser.effectivePermissions,
+    permissionVersion: Number.isFinite(nextVersion)
+      ? nextVersion
+      : currentUser.permissionVersion,
+  };
+}
+
 export function AuthProvider({ children }: AuthProviderProps) {
-  const [token, setToken] = useState('');
+  const [token, setToken] = useState("");
   const [user, setUser] = useState<SessionUser | null>(null);
-  const [deviceId, setDeviceId] = useState('');
+  const [deviceId, setDeviceId] = useState("");
 
   const [bootstrapping, setBootstrapping] = useState(true);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
+  const [error, setError] = useState("");
   const [requiresOtp, setRequiresOtp] = useState(false);
-  const [verifyUserId, setVerifyUserId] = useState('');
+  const [verifyUserId, setVerifyUserId] = useState("");
   const [requiresPasswordChange, setRequiresPasswordChange] = useState(false);
-  const [tempToken, setTempToken] = useState('');
+  const [tempToken, setTempToken] = useState("");
   const [socketReady, setSocketReady] = useState(false);
 
   const socketRef = useRef<any>(null);
@@ -35,8 +77,8 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
   const resetOtpFlow = useCallback(() => {
     setRequiresOtp(false);
-    setVerifyUserId('');
-    setError('');
+    setVerifyUserId("");
+    setError("");
   }, []);
 
   const cleanSocket = useCallback(() => {
@@ -48,14 +90,14 @@ export function AuthProvider({ children }: AuthProviderProps) {
   }, []);
 
   const resetAuthState = useCallback(() => {
-    setToken('');
+    setToken("");
     setUser(null);
     setRequiresOtp(false);
-    setVerifyUserId('');
+    setVerifyUserId("");
     setRequiresPasswordChange(false);
-    setTempToken('');
-    setError('');
-    setApiToken('');
+    setTempToken("");
+    setError("");
+    setApiToken("");
     setSocketReady(false);
   }, []);
 
@@ -66,25 +108,47 @@ export function AuthProvider({ children }: AuthProviderProps) {
     await clearAccessToken();
   }, [cleanSocket, resetAuthState]);
 
-  const applyAccessToken = useCallback(async (nextToken: string, persist: boolean) => {
-    const payload = parseJwt(nextToken);
-    if (!payload || isTokenExpired(payload)) {
-      throw new Error('Token không hợp lệ hoặc đã hết hạn');
-    }
+  const applyAccessToken = useCallback(
+    async (nextToken: string, persist: boolean) => {
+      const payload = parseJwt(nextToken);
+      if (!payload || isTokenExpired(payload)) {
+        throw new Error("Token không hợp lệ hoặc đã hết hạn");
+      }
 
-    const nextUser = userFromTokenPayload(payload);
-    if (!nextUser || !VALID_ROLES.includes(nextUser.role)) {
-      throw new Error('Role không hợp lệ');
-    }
+      const nextUser = userFromTokenPayload(payload);
+      if (!nextUser || !VALID_ROLES.includes(nextUser.role)) {
+        throw new Error("Role không hợp lệ");
+      }
 
-    setToken(nextToken);
-    setUser(nextUser);
-    setApiToken(nextToken);
+      setToken(nextToken);
+      setUser(nextUser);
+      setApiToken(nextToken);
 
-    if (persist) {
-      await saveAccessToken(nextToken);
-    }
-  }, []);
+      if (persist) {
+        await saveAccessToken(nextToken);
+      }
+
+      try {
+        const res = await api.get("/auth/me/permissions", {
+          headers: { Authorization: `Bearer ${nextToken}` },
+        });
+        setUser(normalizePermissionSnapshot(nextUser, res.data));
+      } catch {
+        // JWT permissions keep initial UX responsive; backend guards remain authoritative.
+      }
+    },
+    [],
+  );
+
+  const refreshPermissions = useCallback(async () => {
+    if (!token) return;
+    const res = await api.get("/auth/me/permissions");
+    setUser((currentUser) =>
+      currentUser
+        ? normalizePermissionSnapshot(currentUser, res.data)
+        : currentUser,
+    );
+  }, [token]);
 
   const handleUnauthorized = useCallback(() => {
     if (unauthorizedHandledRef.current) return;
@@ -92,7 +156,10 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
     void (async () => {
       await handleLogout();
-      Alert.alert('Phiên đăng nhập đã hết hạn', 'Vui lòng đăng nhập lại để tiếp tục.');
+      Alert.alert(
+        "Phiên đăng nhập đã hết hạn",
+        "Vui lòng đăng nhập lại để tiếp tục.",
+      );
     })();
   }, [handleLogout]);
 
@@ -106,7 +173,10 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
     const bootstrap = async () => {
       try {
-        const [savedToken, nextDeviceId] = await Promise.all([loadAccessToken(), getOrCreateDeviceId()]);
+        const [savedToken, nextDeviceId] = await Promise.all([
+          loadAccessToken(),
+          getOrCreateDeviceId(),
+        ]);
         if (!mounted) return;
 
         setDeviceId(nextDeviceId);
@@ -117,16 +187,17 @@ export function AuthProvider({ children }: AuthProviderProps) {
         }
 
         const payload = parseJwt(savedToken);
-        const restoredUser = payload ? userFromTokenPayload(payload) : null;
-        if (!payload || isTokenExpired(payload) || !restoredUser) {
+        if (
+          !payload ||
+          isTokenExpired(payload) ||
+          !userFromTokenPayload(payload)
+        ) {
           await clearAccessToken();
           setBootstrapping(false);
           return;
         }
 
-        setToken(savedToken);
-        setUser(restoredUser);
-        setApiToken(savedToken);
+        await applyAccessToken(savedToken, false);
       } catch {
         await clearAccessToken();
       } finally {
@@ -141,7 +212,19 @@ export function AuthProvider({ children }: AuthProviderProps) {
     return () => {
       mounted = false;
     };
-  }, []);
+  }, [applyAccessToken]);
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener("change", (nextState) => {
+      if (nextState === "active") {
+        void refreshPermissions();
+      }
+    });
+
+    return () => {
+      subscription.remove();
+    };
+  }, [refreshPermissions]);
 
   useEffect(() => {
     if (!token || !user) {
@@ -149,63 +232,82 @@ export function AuthProvider({ children }: AuthProviderProps) {
       return;
     }
 
-    const socket = io(API_BASE_URL, { transports: ['websocket'] });
+    const socket = io(API_BASE_URL, {
+      transports: ["websocket"],
+      auth: { token },
+    });
     socketRef.current = socket;
     setSocketReady(true);
 
-    socket.on('connect', () => {
+    socket.on("connect", () => {
       if (user.tenantId) {
-        socket.emit('register', { tenantId: user.tenantId, userId: user.userId });
+        socket.emit("register", {
+          tenantId: user.tenantId,
+          userId: user.userId,
+        });
       }
     });
 
-    const shouldShowCustomerAlerts = user.role === 'ADMIN' || user.role === 'MANAGER' || user.role === 'USER';
+    const shouldShowCustomerAlerts =
+      user.role === "ADMIN" || user.role === "MANAGER" || user.role === "USER";
     const getRequestLabel = (type?: string) => {
-      if (type === 'CALL_STAFF') return 'Khách gọi nhân viên';
-      if (type === 'PAY_CASH') return 'Khách yêu cầu thanh toán tiền mặt';
-      if (type === 'PAY_TRANSFER') return 'Khách yêu cầu thanh toán chuyển khoản';
-      if (type === 'PRINT_BILL') return 'Khách yêu cầu in hóa đơn có QR';
-      return 'Yêu cầu từ khách';
+      if (type === "CALL_STAFF") return "Khách gọi nhân viên";
+      if (type === "PAY_CASH") return "Khách yêu cầu thanh toán tiền mặt";
+      if (type === "PAY_TRANSFER")
+        return "Khách yêu cầu thanh toán chuyển khoản";
+      if (type === "PRINT_BILL") return "Khách yêu cầu in hóa đơn có QR";
+      return "Yêu cầu từ khách";
     };
 
     const handleCustomerRequest = (payload: any) => {
       if (!shouldShowCustomerAlerts) return;
-      const tableName = payload?.tableName || 'Bàn';
-      const customerName = payload?.customerName ? ` - ${payload.customerName}` : '';
-      Alert.alert(getRequestLabel(payload?.type), `${tableName}${customerName}`);
+      const tableName = payload?.tableName || "Bàn";
+      const customerName = payload?.customerName
+        ? ` - ${payload.customerName}`
+        : "";
+      Alert.alert(
+        getRequestLabel(payload?.type),
+        `${tableName}${customerName}`,
+      );
     };
 
     const handlePaymentPaid = (payload: any) => {
       if (!shouldShowCustomerAlerts) return;
-      const tableName = payload?.tableName || 'Bàn';
-      const amount = Number(payload?.amount || 0).toLocaleString('vi-VN');
-      Alert.alert('Đã nhận thanh toán', `${tableName} - ${amount}đ`);
+      const tableName = payload?.tableName || "Bàn";
+      const amount = Number(payload?.amount || 0).toLocaleString("vi-VN");
+      Alert.alert("Đã nhận thanh toán", `${tableName} - ${amount}đ`);
     };
 
-    socket.on('customerRequest', handleCustomerRequest);
-    socket.on('paymentPaid', handlePaymentPaid);
+    const handlePermissionsUpdated = () => {
+      void refreshPermissions();
+    };
+
+    socket.on("customerRequest", handleCustomerRequest);
+    socket.on("paymentPaid", handlePaymentPaid);
+    socket.on("permissionsUpdated", handlePermissionsUpdated);
 
     return () => {
-      socket.off('customerRequest', handleCustomerRequest);
-      socket.off('paymentPaid', handlePaymentPaid);
+      socket.off("customerRequest", handleCustomerRequest);
+      socket.off("paymentPaid", handlePaymentPaid);
+      socket.off("permissionsUpdated", handlePermissionsUpdated);
       socket.disconnect();
       socketRef.current = null;
       setSocketReady(false);
     };
-  }, [token, user, cleanSocket]);
+  }, [token, user, cleanSocket, refreshPermissions]);
 
   const handleLogin = useCallback(
     async (email: string, pass: string) => {
       if (!deviceId) {
-        setError('Đang khởi tạo thiết bị. Vui lòng thử lại.');
+        setError("Đang khởi tạo thiết bị. Vui lòng thử lại.");
         return;
       }
 
-      setError('');
+      setError("");
       setLoading(true);
 
       try {
-        const res = await api.post('/auth/login', {
+        const res = await api.post("/auth/login", {
           email: email || undefined,
           password: pass,
           deviceId,
@@ -214,23 +316,29 @@ export function AuthProvider({ children }: AuthProviderProps) {
         if (res.data.requiresDeviceVerification) {
           setRequiresOtp(true);
           setVerifyUserId(res.data.userId);
-          setError(res.data.devOtp ? `Thiết bị mới. Dev OTP: ${res.data.devOtp}` : 'Thiết bị mới. Vui lòng kiểm tra email để lấy mã OTP.');
+          setError(
+            res.data.devOtp
+              ? `Thiết bị mới. Dev OTP: ${res.data.devOtp}`
+              : "Thiết bị mới. Vui lòng kiểm tra email để lấy mã OTP.",
+          );
           return;
         }
 
         if (res.data.requiresPasswordChange) {
           setRequiresPasswordChange(true);
-          setTempToken(res.data.tempToken || '');
+          setTempToken(res.data.tempToken || "");
           return;
         }
 
         if (!res.data.access_token) {
-          throw new Error('Không nhận được access token');
+          throw new Error("Không nhận được access token");
         }
 
         await applyAccessToken(res.data.access_token, true);
       } catch (err: any) {
-        setError(err.response?.data?.message || err.message || 'Đăng nhập thất bại.');
+        setError(
+          err.response?.data?.message || err.message || "Đăng nhập thất bại.",
+        );
       } finally {
         setLoading(false);
       }
@@ -241,31 +349,35 @@ export function AuthProvider({ children }: AuthProviderProps) {
   const handleVerifyDevice = useCallback(
     async (otpCode: string) => {
       if (!verifyUserId) {
-        setError('Không tìm thấy thông tin xác thực thiết bị.');
+        setError("Không tìm thấy thông tin xác thực thiết bị.");
         return;
       }
 
-      setError('');
+      setError("");
       setLoading(true);
 
       try {
-        const res = await api.post('/auth/verify-device', { userId: verifyUserId, otpCode, deviceId });
+        const res = await api.post("/auth/verify-device", {
+          userId: verifyUserId,
+          otpCode,
+          deviceId,
+        });
 
         if (res.data.requiresPasswordChange) {
           setRequiresPasswordChange(true);
-          setTempToken(res.data.tempToken || '');
+          setTempToken(res.data.tempToken || "");
           resetOtpFlow();
           return;
         }
 
         if (!res.data.access_token) {
-          throw new Error('Không nhận được access token');
+          throw new Error("Không nhận được access token");
         }
 
         await applyAccessToken(res.data.access_token, true);
         resetOtpFlow();
       } catch (err: any) {
-        setError(err.response?.data?.message || 'OTP không hợp lệ.');
+        setError(err.response?.data?.message || "OTP không hợp lệ.");
       } finally {
         setLoading(false);
       }
@@ -276,31 +388,31 @@ export function AuthProvider({ children }: AuthProviderProps) {
   const handleChangePassword = useCallback(
     async (currentPassword: string, newPassword: string) => {
       if (!tempToken) {
-        setError('Phiên đổi mật khẩu đã hết hạn. Vui lòng đăng nhập lại.');
+        setError("Phiên đổi mật khẩu đã hết hạn. Vui lòng đăng nhập lại.");
         return;
       }
 
-      setError('');
+      setError("");
       setLoading(true);
 
       try {
         const res = await api.post(
-          '/auth/change-password',
+          "/auth/change-password",
           { currentPassword, newPassword },
           { headers: { Authorization: `Bearer ${tempToken}` } },
         );
 
         setRequiresPasswordChange(false);
-        setTempToken('');
+        setTempToken("");
 
         if (!res.data.access_token) {
-          throw new Error('Không nhận được access token mới');
+          throw new Error("Không nhận được access token mới");
         }
 
         await applyAccessToken(res.data.access_token, true);
-        Alert.alert('Thành công', 'Đổi mật khẩu thành công');
+        Alert.alert("Thành công", "Đổi mật khẩu thành công");
       } catch (err: any) {
-        setError(err.response?.data?.message || 'Đổi mật khẩu thất bại.');
+        setError(err.response?.data?.message || "Đổi mật khẩu thất bại.");
       } finally {
         setLoading(false);
       }
@@ -327,6 +439,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
     handleVerifyDevice,
     handleChangePassword,
     handlePasswordChangeCancel,
+    refreshPermissions,
     handleLogout,
     resetOtpFlow,
   };
@@ -341,5 +454,9 @@ export function AuthProvider({ children }: AuthProviderProps) {
     );
   }
 
-  return <AuthContext.Provider value={authContextValue}>{children}</AuthContext.Provider>;
+  return (
+    <AuthContext.Provider value={authContextValue}>
+      {children}
+    </AuthContext.Provider>
+  );
 }

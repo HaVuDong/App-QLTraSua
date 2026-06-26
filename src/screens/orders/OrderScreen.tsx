@@ -36,6 +36,8 @@ interface ActiveOrderGroup {
   activeItemCount: number;
   readyItemCount: number;
   hasPending: boolean;
+  paymentStatus?: StaffWorkspaceSession['paymentStatus'];
+  paymentMethod?: StaffWorkspaceSession['paymentMethod'];
 }
 
 export function OrderScreen() {
@@ -202,6 +204,7 @@ export function OrderScreen() {
     socket.on('orderRejected', handleOrderRejected);
     socket.on('customerRequest', handleWorkspaceChanged);
     socket.on('customerRequestUpdated', handleWorkspaceChanged);
+    socket.on('paymentPaid', handleWorkspaceChanged);
     socket.on('manualCheckoutCompleted', handleWorkspaceChanged);
 
     return () => {
@@ -212,6 +215,7 @@ export function OrderScreen() {
       socket.off('orderRejected', handleOrderRejected);
       socket.off('customerRequest', handleWorkspaceChanged);
       socket.off('customerRequestUpdated', handleWorkspaceChanged);
+      socket.off('paymentPaid', handleWorkspaceChanged);
       socket.off('manualCheckoutCompleted', handleWorkspaceChanged);
     };
   }, [fetchActiveOrders, socketReady, socketRef]);
@@ -527,10 +531,12 @@ export function OrderScreen() {
 
   const activeOrderGroups = useMemo<ActiveOrderGroup[]>(() => {
     const groupMap = new Map<string, ActiveOrderGroup>();
+    const workspaceBySession = new Map(workspaceSessions.map((session) => [session.sessionId, session]));
 
     orders.forEach((order) => {
       const sessionRef = order.sessionId;
       const sessionId = typeof sessionRef === 'string' ? sessionRef : sessionRef?._id;
+      const workspaceSession = sessionId ? workspaceBySession.get(sessionId) : undefined;
       const tableId = typeof order.tableId === 'string' ? order.tableId : order.tableId?._id;
       const tableLabel = typeof order.tableId === 'string' ? 'Mang đi' : order.tableId?.name || 'Mang đi';
       const tableStatus = typeof order.tableId === 'string' ? undefined : order.tableId?.status;
@@ -559,11 +565,13 @@ export function OrderScreen() {
         activeItemCount: activeItems.length,
         readyItemCount: readyItems.length,
         hasPending: order.status === 'PENDING',
+        paymentStatus: workspaceSession?.paymentStatus,
+        paymentMethod: workspaceSession?.paymentMethod,
       });
     });
 
     return Array.from(groupMap.values());
-  }, [orders]);
+  }, [orders, workspaceSessions]);
 
   const pendingCustomerRequests = useMemo(
     () =>
@@ -813,6 +821,13 @@ export function OrderScreen() {
                     <Text style={styles.staffMeta}>
                       Bàn: {getTableStatusLabel(group.tableStatus)} | {group.orders.length} đơn trong phiên | {group.readyItemCount}/{group.activeItemCount} món đã xong
                     </Text>
+                  ) : null}
+                  {group.paymentStatus === 'PAID' ? (
+                    <Text style={styles.staffMeta}>
+                      Thanh toán: đã nhận {group.paymentMethod === 'TRANSFER' ? 'chuyển khoản' : 'thủ công'} - cần xác nhận đóng phiên
+                    </Text>
+                  ) : group.paymentStatus === 'REQUESTED' ? (
+                    <Text style={styles.staffMeta}>Thanh toán: khách đã gửi yêu cầu</Text>
                   ) : null}
 
                   {group.orders.map((order) => (

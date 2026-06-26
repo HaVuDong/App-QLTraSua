@@ -67,6 +67,7 @@ export interface StaffWorkspaceSession {
   };
   paymentStatus?: 'UNPAID' | 'REQUESTED' | 'PAID';
   paymentMethod?: 'CASH' | 'TRANSFER' | 'MANUAL';
+  paidAt?: string;
   openedAt?: string;
   lastActivityAt?: string;
   orders: ActiveOrder[];
