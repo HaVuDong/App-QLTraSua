@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { ActivityIndicator, Alert, StatusBar, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { useAuth } from '../../auth/AuthContext';
 import { ScreenBackdrop } from '../../components/common/ScreenBackdrop';
@@ -22,6 +22,37 @@ export function AuthScreen({ route }: any) {
   const [forgotPasswordConfirmPass, setForgotPasswordConfirmPass] = useState('');
   const [resetToken, setResetToken] = useState('');
 
+  const [otpValidTimer, setOtpValidTimer] = useState(0);
+  const [lockTimer, setLockTimer] = useState(0);
+  const wasLockedRef = useRef(false);
+
+  useEffect(() => {
+    let interval: NodeJS.Timeout;
+    if (otpValidTimer > 0 || lockTimer > 0) {
+      interval = setInterval(() => {
+        setOtpValidTimer((prev) => (prev > 0 ? prev - 1 : 0));
+        setLockTimer((prev) => (prev > 0 ? prev - 1 : 0));
+      }, 1000);
+    }
+    return () => clearInterval(interval);
+  }, [otpValidTimer, lockTimer]);
+
+  useEffect(() => {
+    if (lockTimer > 0) {
+      wasLockedRef.current = true;
+    } else if (lockTimer === 0 && wasLockedRef.current && forgotPasswordStep === 'verify') {
+      wasLockedRef.current = false;
+      // Auto resend
+      void handleForgotPasswordRequest(true);
+    }
+  }, [lockTimer, forgotPasswordStep]);
+
+  const formatTime = (seconds: number) => {
+    const m = Math.floor(seconds / 60);
+    const s = seconds % 60;
+    return `${m}:${s < 10 ? '0' : ''}${s}`;
+  };
+
   const submitLogin = () => {
     if (!email.trim()) {
       Alert.alert('Thiếu thông tin', 'Vui lòng nhập email.');
@@ -42,14 +73,18 @@ export function AuthScreen({ route }: any) {
     void handleVerifyDevice(otpCode.trim());
   };
 
-  const handleForgotPasswordRequest = async () => {
+  const handleForgotPasswordRequest = async (isAutoResend = false) => {
     if (!forgotPasswordEmail.trim()) {
-      Alert.alert('Thiếu thông tin', 'Vui lòng nhập email.');
+      if (!isAutoResend) Alert.alert('Thiếu thông tin', 'Vui lòng nhập email.');
       return;
     }
     try {
       await requestForgotPasswordOtp(forgotPasswordEmail.trim());
       setForgotPasswordStep('verify');
+      setOtpValidTimer(60); // 60 seconds
+      if (isAutoResend) {
+        Alert.alert('Thông báo', 'OTP đã được gửi lại. Vui lòng kiểm tra email và nhập mã mới.');
+      }
     } catch (err) {
       // Error is handled in context
     }
@@ -64,8 +99,15 @@ export function AuthScreen({ route }: any) {
       const token = await verifyForgotPasswordOtp(forgotPasswordEmail.trim(), forgotPasswordOtp.trim());
       setResetToken(token);
       setForgotPasswordStep('reset');
-    } catch (err) {
-      // Error is handled in context
+      setOtpValidTimer(0);
+      setLockTimer(0);
+    } catch (err: any) {
+      const msg = err.response?.data?.message || err.message || error || '';
+      if (msg.includes('30 giây')) {
+        setLockTimer(30);
+      } else if (msg.includes('1 giờ')) {
+        setLockTimer(3600);
+      }
     }
   };
 
@@ -101,6 +143,8 @@ export function AuthScreen({ route }: any) {
     setForgotPasswordNewPass('');
     setForgotPasswordConfirmPass('');
     setResetToken('');
+    setOtpValidTimer(0);
+    setLockTimer(0);
   };
 
   return (
@@ -131,7 +175,7 @@ export function AuthScreen({ route }: any) {
               <TouchableOpacity activeOpacity={0.8} style={[styles.buttonBase, styles.buttonSecondary, styles.flex1]} onPress={cancelForgotPassword}>
                 <Text style={styles.buttonText}>Hủy</Text>
               </TouchableOpacity>
-              <TouchableOpacity activeOpacity={0.8} style={[styles.buttonBase, styles.buttonPrimary, styles.flex1]} onPress={handleForgotPasswordRequest}>
+              <TouchableOpacity activeOpacity={0.8} style={[styles.buttonBase, styles.buttonPrimary, styles.flex1]} onPress={() => handleForgotPasswordRequest(false)}>
                 {loading ? <ActivityIndicator color={COLORS.text} /> : <Text style={styles.buttonText}>Gửi OTP</Text>}
               </TouchableOpacity>
             </View>
@@ -139,6 +183,8 @@ export function AuthScreen({ route }: any) {
         ) : forgotPasswordStep === 'verify' ? (
           <View style={styles.formStack}>
             <Text style={styles.otpNotice}>Nhập mã OTP 6 số được gửi đến {forgotPasswordEmail}.</Text>
+            {otpValidTimer > 0 && <Text style={{ color: COLORS.textMuted, fontSize: 12, textAlign: 'center' }}>Mã OTP có hiệu lực trong: {formatTime(otpValidTimer)}</Text>}
+            {lockTimer > 0 && <Text style={{ color: COLORS.error, fontSize: 12, textAlign: 'center' }}>Vui lòng thử lại sau: {formatTime(lockTimer)}</Text>}
             <TextInput
               placeholder="Nhập 6 số OTP"
               value={forgotPasswordOtp}
@@ -146,13 +192,29 @@ export function AuthScreen({ route }: any) {
               keyboardType="numeric"
               maxLength={6}
               placeholderTextColor={COLORS.textMuted}
-              style={[styles.input, styles.inputOtp]}
+              style={[styles.input, styles.inputOtp, lockTimer > 0 && { opacity: 0.5 }]}
+              editable={lockTimer === 0}
             />
+            
+            <TouchableOpacity 
+              activeOpacity={0.8} 
+              onPress={() => handleForgotPasswordRequest(false)} 
+              disabled={lockTimer > 0 || loading}
+              style={{ alignItems: 'center', marginBottom: 8 }}
+            >
+              <Text style={{ color: lockTimer > 0 ? COLORS.textMuted : COLORS.primary, fontSize: 14 }}>Gửi lại OTP</Text>
+            </TouchableOpacity>
+
             <View style={styles.rowSplit}>
               <TouchableOpacity activeOpacity={0.8} style={[styles.buttonBase, styles.buttonSecondary, styles.flex1]} onPress={cancelForgotPassword}>
                 <Text style={styles.buttonText}>Hủy</Text>
               </TouchableOpacity>
-              <TouchableOpacity activeOpacity={0.8} style={[styles.buttonBase, styles.buttonPrimary, styles.flex1]} onPress={handleForgotPasswordVerify}>
+              <TouchableOpacity 
+                activeOpacity={0.8} 
+                style={[styles.buttonBase, lockTimer > 0 ? { backgroundColor: COLORS.border } : styles.buttonPrimary, styles.flex1]} 
+                onPress={handleForgotPasswordVerify}
+                disabled={lockTimer > 0 || loading}
+              >
                 {loading ? <ActivityIndicator color={COLORS.text} /> : <Text style={styles.buttonText}>Xác Thực</Text>}
               </TouchableOpacity>
             </View>
