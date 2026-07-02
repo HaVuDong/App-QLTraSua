@@ -282,19 +282,31 @@ export function AuthProvider({ children }: AuthProviderProps) {
       void refreshPermissions();
     };
 
+    const handleSessionRevoked = () => {
+      void (async () => {
+        await handleLogout();
+        Alert.alert(
+          "Phien dang nhap da bi thu hoi",
+          "Vui long dang nhap lai de tiep tuc.",
+        );
+      })();
+    };
+
     socket.on("customerRequest", handleCustomerRequest);
     socket.on("paymentPaid", handlePaymentPaid);
     socket.on("permissionsUpdated", handlePermissionsUpdated);
+    socket.on("sessionRevoked", handleSessionRevoked);
 
     return () => {
       socket.off("customerRequest", handleCustomerRequest);
       socket.off("paymentPaid", handlePaymentPaid);
       socket.off("permissionsUpdated", handlePermissionsUpdated);
+      socket.off("sessionRevoked", handleSessionRevoked);
       socket.disconnect();
       socketRef.current = null;
       setSocketReady(false);
     };
-  }, [token, user, cleanSocket, refreshPermissions]);
+  }, [token, user, cleanSocket, refreshPermissions, handleLogout]);
 
   const handleLogin = useCallback(
     async (email: string, pass: string) => {
@@ -424,6 +436,54 @@ export function AuthProvider({ children }: AuthProviderProps) {
     await handleLogout();
   }, [handleLogout]);
 
+  const requestForgotPasswordOtp = useCallback(async (email: string) => {
+    setLoading(true);
+    setError("");
+    try {
+      await api.post("/auth/forgot-password/request", { email });
+      Alert.alert("Thành công", "Nếu email hợp lệ, OTP đã được gửi đến email của bạn.");
+    } catch (err: any) {
+      setError(err.response?.data?.message || "Lỗi khi gửi OTP.");
+      throw err;
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  const verifyForgotPasswordOtp = useCallback(async (email: string, otpCode: string) => {
+    setLoading(true);
+    setError("");
+    try {
+      const res = await api.post("/auth/forgot-password/verify", { email, otpCode });
+      return res.data.resetToken;
+    } catch (err: any) {
+      setError(err.response?.data?.message || "OTP không hợp lệ.");
+      throw err;
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  const resetPasswordWithToken = useCallback(async (tokenToReset: string, newPassword: string) => {
+    setLoading(true);
+    setError("");
+    try {
+      const res = await api.post("/auth/forgot-password/reset", { token: tokenToReset, newPassword });
+      
+      if (!res.data.access_token) {
+        throw new Error("Không nhận được access token mới");
+      }
+      
+      await applyAccessToken(res.data.access_token, true);
+      Alert.alert("Thành công", "Đổi mật khẩu thành công");
+    } catch (err: any) {
+      setError(err.response?.data?.message || "Đổi mật khẩu thất bại.");
+      throw err;
+    } finally {
+      setLoading(false);
+    }
+  }, [applyAccessToken]);
+
   const authContextValue: AuthContextValue = {
     token,
     user,
@@ -442,6 +502,9 @@ export function AuthProvider({ children }: AuthProviderProps) {
     refreshPermissions,
     handleLogout,
     resetOtpFlow,
+    requestForgotPasswordOtp,
+    verifyForgotPasswordOtp,
+    resetPasswordWithToken,
   };
 
   if (bootstrapping) {

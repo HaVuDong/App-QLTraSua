@@ -22,6 +22,9 @@ export type AuthContextValue = {
   refreshPermissions: () => Promise<void>;
   handleLogout: () => Promise<void>;
   resetOtpFlow: () => void;
+  requestForgotPasswordOtp: (email: string) => Promise<void>;
+  verifyForgotPasswordOtp: (email: string, otpCode: string) => Promise<string>;
+  resetPasswordWithToken: (token: string, newPassword: string) => Promise<void>;
 };
 
 export const AuthContext = React.createContext<AuthContextValue | null>(null);
